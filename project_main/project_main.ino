@@ -222,7 +222,14 @@ void processWireless() {
  * 消费蓝牙消息
  */
 void handleCommand(String cmd) {
-  // TODO
+  switch(cmd) {
+    case "ROTATE":
+      // TODO：实现电机旋转180度
+      break;
+    default:
+      Serial.print("==========> 蓝牙命令不存在：");
+      Serial.println(cmd);
+  }
 }
 
 
