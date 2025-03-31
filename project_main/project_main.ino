@@ -7,7 +7,7 @@
 // OLED 屏幕参数
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define OLED_RESET    -1
+#define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 //端口设置
@@ -18,7 +18,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 MPU6050 mpu;
 
 // 定义其他需要的全局变量（例如 RS485 通信、伺服电机参数等）
-int servoPosition = 0;   // 当前伺服电机位置（示例变量）
+int servoPosition = 0;  // 当前伺服电机位置（示例变量）
 
 // ------------------------ 模块函数声明 ------------------------
 
@@ -55,16 +55,16 @@ void setup() {
 void loop() {
   // 1. 读取传感器数据
   processSensors();
-  
+
   // 2. 执行闭环控制算法
   processControl();
-  
+
   // 3. 处理 RS485 通信
   processRS485Communication();
-  
+
   // 4. 更新 OLED 显示数据
   processDisplay();
-  
+
   // 5. 执行无线通信任务（如Wi-Fi或蓝牙）
   processWireless();
 
@@ -74,7 +74,7 @@ void loop() {
   sendServoCommand();
 
   // 2. 稍作等待后读取伺服电机的响应
-  delay(50); // 等待伺服电机响应
+  delay(50);  // 等待伺服电机响应
   readServoResponse();
 
   // 3. 每隔一段时间发送一次调试命令
@@ -91,11 +91,12 @@ void initHardware() {
   Serial.begin(115200);
   // 初始化 I2C 总线（用于 OLED 和 MPU6050）
   Wire.begin();
-  
+
   // 初始化 OLED 显示屏
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("OLED 初始化失败");
-    while (1);  // 初始化失败则停留在此
+    while (1)
+      ;  // 初始化失败则停留在此
   }
   display.clearDisplay();
   display.display();
@@ -132,8 +133,10 @@ void processSensors() {
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
   // 打印或存储数据供后续控制算法使用
   Serial.print("加速度: ");
-  Serial.print(ax); Serial.print(", ");
-  Serial.print(ay); Serial.print(", ");
+  Serial.print(ax);
+  Serial.print(", ");
+  Serial.print(ay);
+  Serial.print(", ");
   Serial.println(az);
 }
 
@@ -144,7 +147,7 @@ void processControl() {
   servoPosition = (servoPosition + 1) % 180;  // 模拟180°内运动
   Serial.print("目标位置: ");
   Serial.println(servoPosition);
-  
+
   // 根据设计要求生成 S 曲线或梯形速度曲线
   // 调整 PID 参数等
 }
@@ -153,15 +156,32 @@ void processControl() {
 void processDisplay() {
   // 清空屏幕
   display.clearDisplay();
-  
-  // 示例：在屏幕上显示伺服电机位置和其他调试信息
+
+  int16_t ax, ay, az;
+  float AccXangle;
+  mpu.getAcceleration(&ax, &ay, &az);
+
+  // 计算 X 轴角度
+  AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
+
+  // 显示角度
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.print("Servo Pos: ");
-  display.println(servoPosition);
-  
-  // 可添加绘制速度曲线等图形显示
+  display.print("Angle X: ");
+  display.println(AccXangle);
+
+  // 绘制指示线
+  int x_center = SCREEN_WIDTH / 2;
+  int y_center = SCREEN_HEIGHT / 2;
+  int line_length = 30;
+  int angle_rad = AccXangle * PI / 180;
+  int x_end = x_center + line_length * sin(angle_rad);
+  int y_end = y_center - line_length * cos(angle_rad);
+
+  display.drawLine(x_center, y_center, x_end, y_end, SSD1306_WHITE);
+
+  // 更新显示
   display.display();
 }
 
@@ -205,7 +225,7 @@ void readServoResponse() {
       char c = Serial2.read();
       Serial.print(c);
     }
-    Serial.println(); // 换行
+    Serial.println();  // 换行
   } else {
     Serial.println("未接收到响应。");
   }
