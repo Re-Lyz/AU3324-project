@@ -2,6 +2,8 @@
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
 #include <MPU6050.h>
+#include <BluetoothSerial.h>
+
 
 // ------------------------ 全局变量与常量 ------------------------
 // OLED 屏幕参数
@@ -16,9 +18,11 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // 创建 MPU6050 对象
 MPU6050 mpu;
+BluetoothSerial SerialBT;  // 蓝牙串口实例
 
 // 定义其他需要的全局变量（例如 RS485 通信、伺服电机参数等）
 int servoPosition = 0;  // 当前伺服电机位置（示例变量）
+bool btConnected = false;  // BT连接状态标志
 
 // ------------------------ 模块函数声明 ------------------------
 
@@ -47,8 +51,13 @@ void setup() {
   // 初始化硬件
   initHardware();
 
-  // 初始化其他模块（如果有额外设置，可以在这里调用）
-  // 例如：initWireless();
+  // 蓝牙初始化
+  if(!SerialBT.begin("ESP32_Servo")) {  // 设备名称
+    Serial.println("蓝牙初始化失败!");
+  } else {
+    Serial.println("蓝牙已就绪，名称: ESP32_Servo");
+    SerialBT.setPin("1234", 4);  // 设置配对密码
+  }
 }
 
 // ------------------------ loop() 函数 ------------------------
@@ -171,6 +180,11 @@ void processDisplay() {
   display.print("Angle X: ");
   display.println(AccXangle);
 
+  // 显示蓝牙连接状态
+  display.setCursor(0, 56);
+  display.print("BT: ");
+  display.print(btConnected ? "Connected" : "Available");
+
   // 绘制指示线
   int x_center = SCREEN_WIDTH / 2;
   int y_center = SCREEN_HEIGHT / 2;
@@ -185,11 +199,30 @@ void processDisplay() {
   display.display();
 }
 
-// 无线通信模块：预留 Wi-Fi 或蓝牙数据处理接口
+// 无线通信模块
 void processWireless() {
-  // 示例：无线模块任务处理，可包括连接状态检测、数据收发等
-  Serial.println("无线通信任务处理中...");
-  // 实际实现时，调用 Wi-Fi 或蓝牙库函数进行数据处理
+  // 检查连接状态变化
+  bool currentConnected = SerialBT.hasClient();
+  if(currentConnected != btConnected) {
+    btConnected = currentConnected;
+    Serial.println(btConnected ? "蓝牙已连接" : "蓝牙已断开");
+  }
+
+  // 处理收到的命令
+  if(SerialBT.available()) {
+    String command = SerialBT.readStringUntil('\n');
+    command.trim();
+    Serial.print("==========> 蓝牙消息：");
+    Serial.println(command);
+    handleCommand(command);
+  }
+}
+
+/**
+ * 消费蓝牙消息
+ */
+void handleCommand(String cmd) {
+  // TODO
 }
 
 
