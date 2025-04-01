@@ -17,6 +17,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 MPU6050 mpu;
 ModbusMaster node;
 
+debugmode=True;
+
 // 定义其他全局变量（例如伺服电机参数等）
 int servoPosition = 0;   // 当前伺服电机位置（示例变量）
 
@@ -30,26 +32,81 @@ void processWireless();
 void sendServoCommand();
 void readServoResponse();
 
+// PID控制器类
+class PID {
+public:
+  // 构造函数，初始化PID常数
+  PID(float p, float i, float d) : kp(p), ki(i), kd(d), prevError(0), integral(0) {}
+
+  // 计算PID控制输出
+  float compute(float setpoint, float input) {
+    // 计算误差
+    float error = setpoint - input;
+
+    float pTerm = kp * error;    // 比例项
+    integral += error;
+    float iTerm = ki * integral;    // 积分项
+    float dTerm = kd * (error - prevError);    // 微分项
+
+    // 计算PID输出
+    float output = pTerm + iTerm + dTerm;
+    // 更新前一误差
+    prevError = error;
+    return output;
+  }
+
+private:
+  float kp;  // 比例常数
+  float ki;  // 积分常数
+  float kd;  // 微分常数
+
+  float prevError;  // 上一次的误差
+  float integral;   // 积分值
+};
+
+// PID控制器实例
+PID pidSpeed(1.0, 0.1, 0.05);  // PID参数：比例常数、积分常数、微分常数
+PID pidAcceleration(1.0, 0.1, 0.05);  // PID参数：比例常数、积分常数、微分常数
+
 // ------------------------ setup() 函数 ------------------------
 void setup() {
   initHardware();
   node.begin(1, Serial2);
   Serial.println("Modbus RTU initialization complete.");
+
+    // Set the servo motor to position mode (address 2109h)
+  node.writeSingleRegister(0x2109, 1);  // Set to position mode
+  delay(100); // Delay for the mode to apply
+  node.writeSingleRegister(0x2320, 10000); // Set target position to 10000 pulses
+  delay(100);
+  node.writeSingleRegister(0x2321, 500);  // Set target speed to 500 rpm
+  delay(100);
+  node.writeSingleRegister(0x2322, 10);   // Set acceleration to 10 rps/s
+  delay(100);
+  node.writeSingleRegister(0x2323, 10);   // Set deceleration to 10 rps/s
+  delay(100);
+  node.writeSingleRegister(0x2300, 2);    // Set trigger to ON
+  delay(100);
+
 }
 
 // ------------------------ loop() 函数 ------------------------
 void loop() {
-  processSensors();
-  processControl();
-  processRS485Communication();
-  processDisplay();
-  processWireless();
-
-  // 发送调试命令给伺服电机
-  sendServoCommand();
-  delay(50); // 等待伺服电机响应
-  readServoResponse();
-  delay(1000); // 每隔一段时间发送一次调试命令
+  if(debugmode){
+    // 发送调试命令给伺服电机
+    sendServoCommand();
+    delay(50); // 等待伺服电机响应
+    readServoResponse();
+    delay(1000); // 每隔一段时间发送一次调试命令
+  }
+  else{
+    float modifiedSpeed, modifiedAcceleration;
+    processSensors(modifiedSpeed, modifiedAcceleration);
+    processControl(modifiedSpeed, modifiedAcceleration);
+    processRS485Communication();
+    processDisplay();
+    processWireless();
+  }
 }
 
 // ------------------------ 模块函数实现 ------------------------
@@ -91,21 +148,51 @@ void processRS485Communication() {
 }
 
 // 传感器模块：读取 MPU6050 数据
-void processSensors() {
+void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   int16_t ax, ay, az, gx, gy, gz;
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  // 当前速度和加速度 (假设由传感器获取，这里用虚拟值)
+  float currentSpeed = gx;  // 以陀螺仪的x轴数据为当前速度
+  float currentAcceleration = ax;  // 以加速度计的x轴数据为当前加速度
+
+  // 使用PID控制器计算修改后的速度和加速度
+  modifiedSpeed = pidSpeed.compute(targetSpeed, currentSpeed);  // 计算修正后的速度
+  modifiedAcceleration = pidAcceleration.compute(targetAcceleration, currentAcceleration);  // 计算修正后的加速度
+
   Serial.print("accleration: ");
   Serial.print(ax); Serial.print(", ");
   Serial.print(ay); Serial.print(", ");
   Serial.println(az);
+
 }
 
-// 控制算法模块：示例计算目标位置
-void processControl() {
-  servoPosition = (servoPosition + 1) % 180;
-  Serial.print("target position: ");
+void processControl(float modifiedSpeed, float modifiedAcceleration) {
+  // 设置为速度模式 (2109h 寄存器设置为速度模式)
+  node.writeSingleRegister(0x2109, 2);  // 设置为速度模式
+  delay(100);  // 延时让设置生效
+
+  // 设置加减速速率 (2385h 寄存器设置加减速)
+  // 传入 modifiedAcceleration 参数，单位是 0.1 rps/s，因此乘以 10 得到实际的加减速速率
+  node.writeSingleRegister(0x2385, modifiedAcceleration * 10);  // 设置加减速速率为传入的 modifiedAcceleration
+  delay(100);
+
+  // 设置目标速度 (2390h 寄存器设置目标速度)
+  node.writeSingleRegister(0x2390, modifiedSpeed);  // 设置目标速度为传入的 modifiedSpeed
+  delay(100);
+
+  // 输出当前的目标位置和速度
+  Serial.print("Target Position: ");
   Serial.println(servoPosition);
+  Serial.print("Modified Speed: ");
+  Serial.println(modifiedSpeed);
+  Serial.print("Modified Acceleration: ");
+  Serial.println(modifiedAcceleration);
+
+  // 更新目标位置，保持位置的循环调整
+  servoPosition = (servoPosition + 1) % 180;
 }
+
 
 // 显示模块：更新 OLED 显示内容
 void processDisplay() {
