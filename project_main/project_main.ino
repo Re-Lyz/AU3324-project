@@ -201,6 +201,9 @@ void processDisplay() {
 
 // 无线通信模块
 void processWireless() {
+  static unsigned long lastSendTime = 0;
+  const unsigned long sendInterval = 500;
+
   // 检查连接状态变化
   bool currentConnected = SerialBT.hasClient();
   if(currentConnected != btConnected) {
@@ -208,28 +211,42 @@ void processWireless() {
     Serial.println(btConnected ? "蓝牙已连接" : "蓝牙已断开");
   }
 
-  // 处理收到的命令
-  if(SerialBT.available()) {
+  // 处理所有收到的命令和数据请求
+  while(SerialBT.available()) {
     String command = SerialBT.readStringUntil('\n');
     command.trim();
     Serial.print("==========> 蓝牙消息：");
     Serial.println(command);
-    handleCommand(command);
+    handleCommand(command); 
   }
+
 }
 
 /**
  * 消费蓝牙消息
  */
 void handleCommand(String cmd) {
-  switch(cmd) {
-    case "ROTATE":
-      // TODO：实现电机旋转180度
-      break;
-    default:
-      Serial.print("==========> 蓝牙命令不存在：");
-      Serial.println(cmd);
+  if(cmd == "ROTATE") {
+    // TODO：实现电机旋转180度
+  } else if(cmd == "GET_DATA") {
+      int16_t ax, ay, az;
+      mpu.getAcceleration(&ax, &ay, &az);
+      float AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
+
+      // 发送数据，格式与Node.js解析逻辑匹配
+      String dataStr = "DATA:" + String(AccXangle) + "," + 
+                      String(ax) + "," + 
+                      String(ay) + "," + 
+                      String(az) + "," + 
+                      String(servoPosition) + "\n";
+      
+      SerialBT.print(dataStr);
+      Serial.println("Sent sensor data: " + dataStr);
+  } else {
+    Serial.print("==========> 蓝牙命令不存在：");
+    Serial.println(cmd);
   }
+
 }
 
 
