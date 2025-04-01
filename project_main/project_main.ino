@@ -3,6 +3,7 @@
 #include <Adafruit_SSD1306.h>
 #include <MPU6050.h>
 #include <ModbusMaster.h>
+#include <BluetoothSerial.h>
 
 // ------------------------ 全局变量与常量 ------------------------
 // OLED 屏幕参数
@@ -21,6 +22,7 @@ debugmode=True;
 
 // 定义其他全局变量（例如伺服电机参数等）
 int servoPosition = 0;   // 当前伺服电机位置（示例变量）
+bool btConnected = false;  // BT连接状态标志
 
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
@@ -140,7 +142,15 @@ void initHardware() {
   Serial2.begin(RS485_BAUD, SERIAL_8N1, 16, 17);
 
   Serial.println("start testing");
-}
+
+    // 蓝牙初始化
+  if(!SerialBT.begin("ESP32_Servo")) {  // 设备名称
+    Serial.println("蓝牙初始化失败!");
+  } else {
+    Serial.println("蓝牙已就绪，名称: ESP32_Servo");
+    SerialBT.setPin("1234", 4);  // 设置配对密码
+  }
+
 
 // 通信模块：示例仅打印调试信息
 void processRS485Communication() {
@@ -193,22 +203,72 @@ void processControl(float modifiedSpeed, float modifiedAcceleration) {
   servoPosition = (servoPosition + 1) % 180;
 }
 
-
 // 显示模块：更新 OLED 显示内容
 void processDisplay() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.print("Servo Pos: ");
-  display.println(servoPosition);
-  display.display();
-}
+   // 清空屏幕
+   display.clearDisplay();
+ 
+   int16_t ax, ay, az;
+   float AccXangle;
+   mpu.getAcceleration(&ax, &ay, &az);
+ 
+   // 计算 X 轴角度
+   AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
+ 
+   // 显示角度
+   display.setTextSize(1);
+   display.setTextColor(SSD1306_WHITE);
+   display.setCursor(0, 0);
+   display.print("Angle X: ");
+   display.println(AccXangle);
+ 
+   // 显示蓝牙连接状态
+   display.setCursor(0, 56);
+   display.print("BT: ");
+   display.print(btConnected ? "Connected" : "Available");
+ 
+   // 绘制指示线
+   int x_center = SCREEN_WIDTH / 2;
+   int y_center = SCREEN_HEIGHT / 2;
+   int line_length = 30;
+   int angle_rad = AccXangle * PI / 180;
+   int x_end = x_center + line_length * sin(angle_rad);
+   int y_end = y_center - line_length * cos(angle_rad);
+ 
+   display.drawLine(x_center, y_center, x_end, y_end, SSD1306_WHITE);
+ 
+   // 更新显示
+   display.display();
+ }
 
-// 无线通信模块：示例仅打印调试信息
-void processWireless() {
-  Serial.println("wifi processing...");
-}
+// 无线通信模块
+ void processWireless() {
+   // 示例：无线模块任务处理，可包括连接状态检测、数据收发等
+   Serial.println("无线通信任务处理中...");
+   // 实际实现时，调用 Wi-Fi 或蓝牙库函数进行数据处理
+   // 检查连接状态变化
+   bool currentConnected = SerialBT.hasClient();
+   if(currentConnected != btConnected) {
+     btConnected = currentConnected;
+     Serial.println(btConnected ? "蓝牙已连接" : "蓝牙已断开");
+   }
+ 
+   // 处理收到的命令
+   if(SerialBT.available()) {
+     String command = SerialBT.readStringUntil('\n');
+     command.trim();
+     Serial.print("==========> 蓝牙消息：");
+     Serial.println(command);
+     handleCommand(command);
+   }
+ }
+ 
+ /**
+  * 消费蓝牙消息
+  */
+ void handleCommand(String cmd) {
+   // TODO
+ }
 
 /**
  * 发送伺服电机调试命令
@@ -233,6 +293,18 @@ void sendServoCommand() {
     Serial.println(result);
   }
 }
+
+void handleCommand(String cmd) {
+   // TODO
+   switch(cmd) {
+     case "ROTATE":
+       // TODO：实现电机旋转180度
+       break;
+     default:
+       Serial.print("==========> 蓝牙命令不存在：");
+       Serial.println(cmd);
+   }
+ }
 
 /**
  * 读取伺服电机响应数据并输出到串口监视器
