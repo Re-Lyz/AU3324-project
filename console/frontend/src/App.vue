@@ -26,35 +26,30 @@ export default {
   setup() {
     const connected = ref(false);
     const chart = ref(null);
+    const SERVER_PORT = 8081;
     let socket = null;
 
     /**
      * WebSocket获取实时云台倾角
      */
     const connectWebSocket = () => {
-      socket = new WebSocket('ws://localhost:3001');
+      socket = new WebSocket(`ws://localhost:${SERVER_PORT}`);
 
       socket.onopen = () => {
         console.log('Connected to WebSocket server');
-        // 连接到ESP32 (需要替换为实际设备地址)
-        socket.send(JSON.stringify({
-          action: 'connect',
-          payload: { address: '00:11:22:33:44:55' }
-        }));
       };
 
       socket.onmessage = (event) => {
         const { type, data } = JSON.parse(event.data);
         
         if (type === 'angle') {
-          // 提取角度值 (假设数据格式为 "Angle:12.5")
           const angleMatch = data.match(/Angle:([-\d.]+)/);
           if (angleMatch) {
             const angle = parseFloat(angleMatch[1]);
             chart.value.updateChart(angle);
           }
         } else if (type === 'status') {
-          connected.value = true;
+          connected.value = data.isConnected;
         } else if (type === 'error') {
           console.error('Error:', data);
         }
@@ -70,7 +65,7 @@ export default {
      * 发送旋转云台Post请求
      */
     const sendRotateRequest = () => {
-      fetch('http://localhost:3001/api/rotate', {
+      fetch(`http://localhost:${SERVER_PORT}/api/rotate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -80,10 +75,13 @@ export default {
         if (response.ok) {
           console.log('Rotation request sent successfully');
         } else {
-          console.error('Failed to send rotation request');
+          return response.json().then(errData => {
+            throw new Error(errData.message || 'Request failed');
+          });
         }
       }).catch(error => {
         console.error('Error:', error);
+        alert(`操作失败: ${error.message}`);
       });
     };
 
@@ -189,5 +187,4 @@ h2 {
   padding: 20px;
   text-align: center;
 }
-
 </style>
