@@ -70,7 +70,7 @@ export default {
      * 发送旋转云台Post请求
      */
     const sendRotateRequest = () => {
-      fetch('/api/rotate', {
+      fetch('http://localhost:3001/api/rotate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
