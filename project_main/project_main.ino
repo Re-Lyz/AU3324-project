@@ -190,7 +190,7 @@ void processControl(float modifiedSpeed, float modifiedAcceleration) {
   // 设置目标速度 (2390h 寄存器设置目标速度)
   node.writeSingleRegister(0x2390, modifiedSpeed);  // 设置目标速度为传入的 modifiedSpeed
   delay(100);
-
+  
   // 输出当前的目标位置和速度
   Serial.print("Target Position: ");
   Serial.println(servoPosition);
@@ -203,6 +203,7 @@ void processControl(float modifiedSpeed, float modifiedAcceleration) {
   servoPosition = (servoPosition + 1) % 180;
 }
 
+  
 // 显示模块：更新 OLED 显示内容
 void processDisplay() {
    // 清空屏幕
@@ -239,37 +240,62 @@ void processDisplay() {
  
    // 更新显示
    display.display();
- }
+}
 
+  
 // 无线通信模块
- void processWireless() {
-   // 示例：无线模块任务处理，可包括连接状态检测、数据收发等
-   Serial.println("无线通信任务处理中...");
-   // 实际实现时，调用 Wi-Fi 或蓝牙库函数进行数据处理
-   // 检查连接状态变化
-   bool currentConnected = SerialBT.hasClient();
-   if(currentConnected != btConnected) {
-     btConnected = currentConnected;
-     Serial.println(btConnected ? "蓝牙已连接" : "蓝牙已断开");
-   }
- 
-   // 处理收到的命令
-   if(SerialBT.available()) {
-     String command = SerialBT.readStringUntil('\n');
-     command.trim();
-     Serial.print("==========> 蓝牙消息：");
-     Serial.println(command);
-     handleCommand(command);
-   }
- }
- 
- /**
-  * 消费蓝牙消息
-  */
- void handleCommand(String cmd) {
-   // TODO
- }
+void processWireless() {
+  Serial.println("无线通信任务处理中...");
+  static unsigned long lastSendTime = 0;
+  const unsigned long sendInterval = 500;
 
+  // 检查连接状态变化
+  bool currentConnected = SerialBT.hasClient();
+  if(currentConnected != btConnected) {
+    btConnected = currentConnected;
+    Serial.println(btConnected ? "蓝牙已连接" : "蓝牙已断开");
+  }
+
+  // 处理所有收到的命令和数据请求
+  while(SerialBT.available()) {
+    String command = SerialBT.readStringUntil('\n');
+    command.trim();
+    Serial.print("==========> 蓝牙消息：");
+    Serial.println(command);
+    handleCommand(command); 
+  }
+
+}
+
+  
+/**
+ * 消费蓝牙消息
+ */
+void handleCommand(String cmd) {
+  if(cmd == "ROTATE") {
+    // TODO：实现电机旋转180度
+  } else if(cmd == "GET_DATA") {
+      int16_t ax, ay, az;
+      mpu.getAcceleration(&ax, &ay, &az);
+      float AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
+
+      // 发送数据，格式与Node.js解析逻辑匹配
+      String dataStr = "DATA:" + String(AccXangle) + "," + 
+                      String(ax) + "," + 
+                      String(ay) + "," + 
+                      String(az) + "," + 
+                      String(servoPosition) + "\n";
+      
+      SerialBT.print(dataStr);
+      Serial.println("Sent sensor data: " + dataStr);
+  } else {
+    Serial.print("==========> 蓝牙命令不存在：");
+    Serial.println(cmd);
+  }
+
+}
+
+  
 /**
  * 发送伺服电机调试命令
  * 示例：发送 "SET_POS:90" 命令给伺服电机
@@ -294,18 +320,7 @@ void sendServoCommand() {
   }
 }
 
-void handleCommand(String cmd) {
-   // TODO
-   switch(cmd) {
-     case "ROTATE":
-       // TODO：实现电机旋转180度
-       break;
-     default:
-       Serial.print("==========> 蓝牙命令不存在：");
-       Serial.println(cmd);
-   }
- }
-
+  
 /**
  * 读取伺服电机响应数据并输出到串口监视器
  */
