@@ -12,28 +12,32 @@
 #define SCREEN_HEIGHT 64
 #define OLED_RESET    -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-
 // RS485 通信波特率
 #define RS485_BAUD 115200
+
+#define ONE_ROLL 1000
 
 MPU6050 mpu;
 ModbusMaster node;
 BluetoothSerial SerialBT;  // 声明蓝牙串口实例
 
 // 定义其他全局变量（例如伺服电机参数等）
-int servoPosition = 0;     // 当前伺服电机位置（示例变量）
 bool btConnected = false;  // 蓝牙连接状态标志
-bool debugmode = true;
+bool debugmode = false;
+bool useTrapezoidalProfile = true;
+bool start = true;
+float originAngle;
+float currentAngle;
 
-// 定义目标速度和加速度全局常量（用于PID计算）
-const float targetSpeed = 500.0;       // 目标速度，单位 rpm
-const float targetAcceleration = 10.0;   // 目标加减速，单位 rps/s
-
+const float targetPosition = 180.0;      // 目标旋转角度，单位：度
+const float positionTolerance = 0.5;       // 允许的误差范围，单位：度
+unsigned long offset = 0;
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
 void processRS485Communication();
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration);
-void processControl(float modifiedSpeed, float modifiedAcceleration);
+void processControl();
+void regulateControl(float modifiedSpeed, float modifiedAcceleration);
 void processDisplay();
 void processWireless();
 void sendServoCommand();
@@ -70,6 +74,133 @@ private:
 PID pidSpeed(1.0, 0.1, 0.05);         // 用于速度控制的PID
 PID pidAcceleration(1.0, 0.1, 0.05);    // 用于加减速控制的PID
 
+class TrapezoidalProfile {
+  private:
+    float t_acc;     // 加速阶段时间（秒）
+    float t_const;   // 匀速阶段时间（秒）
+    float t_dec;     // 减速阶段时间（秒）
+    float maxSpeed;  // 最大速度（°/s）
+    float a;         // 加速度（°/s²）
+    float d;         // 减速度（°/s²）
+    
+  public:
+    // 构造函数，固定基本参数
+    TrapezoidalProfile(float t_acc, float t_const, float t_dec, float maxSpeed, float a, float d) {
+      this->t_acc = t_acc;
+      this->t_const = t_const;
+      this->t_dec = t_dec;
+      this->maxSpeed = maxSpeed;
+      this->a = a;
+      this->d = d;
+    }
+    
+    // 根据当前时间 t 计算目标速度和加速度
+    void updateProfile(float t, float &targetSpeed, float &targetAcceleration) {
+      if (t < t_acc) {
+        // 加速阶段：线性加速
+        targetAcceleration = a;
+        targetSpeed = a * t;
+      } else if (t < t_acc + t_const) {
+        // 匀速阶段
+        targetAcceleration = 0;
+        targetSpeed = maxSpeed;
+      } else if (t < t_acc + t_const + t_dec) {
+        // 减速阶段：线性减速
+        float t_dec_phase = t - t_acc - t_const;
+        targetAcceleration = -d;
+        targetSpeed = maxSpeed - d * t_dec_phase;
+      } else {
+        // 运动结束，速度和加速度归零
+        targetAcceleration = 0;
+        targetSpeed = 0;
+      }
+    }
+};
+
+class SCurveProfile {
+  private:
+    float t_r;       // 上升斜坡阶段时间（秒）
+    float t_const;   // 恒定加速度阶段时间（秒）
+    float t_r_down;  // 下降斜坡阶段时间（秒）
+    float A_max;     // 最大加速度（°/s²）
+    float t_cv;      // 匀速阶段持续时间（秒）
+    float T_acc;     // 加速阶段总时间 = t_r + t_const + t_r_down
+    float V_max;     // 最大速度（加速阶段结束时），计算公式：0.5*A_max*t_r + A_max*t_const + 0.5*A_max*t_r_down
+    
+    // 辅助函数：计算加速阶段（0 ≤ t ≤ T_acc）的目标速度和加速度
+    void accelerationPhase(float t, float &speed, float &acceleration) {
+      if (t < t_r) {
+        // 上升斜坡阶段：加速度从 0 线性增加到 A_max
+        acceleration = A_max * (t / t_r);
+        speed = 0.5 * A_max * (t * t / t_r);
+      } else if (t < t_r + t_const) {
+        // 恒定加速度阶段：加速度恒定为 A_max
+        acceleration = A_max;
+        float speed_ramp = 0.5 * A_max * t_r;  // 上升阶段累计速度
+        float t_const_phase = t - t_r;
+        speed = speed_ramp + A_max * t_const_phase;
+      } else if (t < T_acc) {
+        // 下降斜坡阶段：加速度从 A_max 线性下降到 0
+        float t_down = t - t_r - t_const;
+        acceleration = A_max * (1 - t_down / t_r_down);
+        float speed_ramp = 0.5 * A_max * t_r;
+        float speed_const = A_max * t_const;
+        float speed_ramp_down = A_max * t_down - 0.5 * A_max * (t_down * t_down / t_r_down);
+        speed = speed_ramp + speed_const + speed_ramp_down;
+      } else {
+        acceleration = 0;
+        speed = V_max;
+      }
+    }
+    
+  public:
+    // 构造函数：固定基本参数
+    // t_r, t_const, t_r_down 为加速阶段参数，A_max 为最大加速度，
+    // t_cv 为匀速阶段时间。减速阶段与加速阶段对称。
+    SCurveProfile(float t_r, float t_const, float t_r_down, float A_max, float t_cv) {
+      this->t_r = t_r;
+      this->t_const = t_const;
+      this->t_r_down = t_r_down;
+      this->A_max = A_max;
+      this->t_cv = t_cv;
+      T_acc = t_r + t_const + t_r_down;
+      V_max = 0.5 * A_max * t_r + A_max * t_const + 0.5 * A_max * t_r_down;
+    }
+    
+    // 根据当前时间 t（单位：秒）计算整个 S 曲线运动的目标速度和加速度
+    // 整个运动分为：加速阶段（0 ≤ t < T_acc）、匀速阶段（T_acc ≤ t < T_acc + t_cv）、
+    // 以及减速阶段（T_acc + t_cv ≤ t < 2*T_acc + t_cv）。
+    void updateProfile(float t, float &targetSpeed, float &targetAcceleration) {
+      float T_total = 2 * T_acc + t_cv;
+      if (t < 0) {
+        targetSpeed = 0;
+        targetAcceleration = 0;
+      } else if (t < T_acc) {
+        // 加速阶段
+        accelerationPhase(t, targetSpeed, targetAcceleration);
+      } else if (t < T_acc + t_cv) {
+        // 匀速阶段
+        targetSpeed = V_max;
+        targetAcceleration = 0;
+      } else if (t < T_total) {
+        // 减速阶段：对称于加速阶段
+        float t_dec = t - (T_acc + t_cv);     // 当前减速阶段时间
+        float t_mirror = T_acc - t_dec;         // 对称于加速阶段
+        float speed_mirror, accel_mirror;
+        accelerationPhase(t_mirror, speed_mirror, accel_mirror);
+        targetSpeed = V_max - speed_mirror;
+        targetAcceleration = -accel_mirror;
+      } else {
+        // 运动结束
+        targetSpeed = 0;
+        targetAcceleration = 0;
+      }
+    }
+};
+
+TrapezoidalProfile trapezoidal(5.0, 20.0, 5.0, 7.2, 1.44, 1.44);
+SCurveProfile sCurve(2.0, 3.0, 2.0, 1.736, 16.0);
+
 // ------------------------ setup() 函数 ------------------------
 void setup() {
   initHardware();
@@ -86,16 +217,15 @@ void setup() {
     Serial.println(result);
   }
 
-  // 设置伺服电机为位置模式，并初始化一些参数（寄存器地址参考文档）
   node.writeSingleRegister(0x2109, 1);  // 设置为位置模式
   delay(100);
-  node.writeSingleRegister(0x2310, 3);
+  node.writeSingleRegister(0x2310, 2);
   delay(100);
   node.writeSingleRegister(0x2311, 1);  
   delay(100);
-  node.writeSingleRegister(0x2320, 10000); // 设定目标位置为 10000 脉冲
+  node.writeSingleRegister(0x2320, 1000); 
   delay(100);
-  node.writeSingleRegister(0x2321, 500);  // 设定目标速度为 500 rpm
+  node.writeSingleRegister(0x2321, 100);  // 设定目标速度为 500 rpm
   delay(100);
   node.writeSingleRegister(0x2322, 10);   // 设定加速度为 10 rps/s
   delay(100);
@@ -105,6 +235,8 @@ void setup() {
   delay(100);
   node.writeSingleRegister(0x2316, 1);    // 运动触发信号设定为 ON
   delay(100);
+  currentAngle = 0;
+
 }
 
 // ------------------------ loop() 函数 ------------------------
@@ -115,26 +247,61 @@ void loop() {
     delay(50);  // 等待伺服电机响应
     readServoResponse();
     delay(1000);  // 每隔一段时间发送一次调试命令
-  } 
+  }
   float modifiedSpeed, modifiedAcceleration;
-  processSensors(modifiedSpeed, modifiedAcceleration);
-  processControl(modifiedSpeed, modifiedAcceleration);
+
+  if (start) {
+    processControl();
+    start = false;
+    offset = millis();//记录初始时间，用于计算当前时间的理论速度和加速度
+    uint8_t result = node.readHoldingRegisters(0x6064, 2);
+    if (result == node.ku8MBSuccess) {
+      uint16_t highWord = node.getResponseBuffer(0); // 高16位
+      uint16_t lowWord  = node.getResponseBuffer(1);  // 低16位
+      
+      // 合并为一个32位数据（注意数据的符号问题）
+      int32_t data = ((int32_t)highWord << 16) | lowWord;
+      originAngle = data/ONE_ROLL*360;//记录初始角度，用于计算是否旋转了180°
+    }
+  }
+
+  // processSensors(modifiedSpeed, modifiedAcceleration);
+  // regulateControl(modifiedSpeed, modifiedAcceleration);
   processRS485Communication();
+
   processDisplay();
   processWireless();
-  
+
+  uint8_t result = node.readHoldingRegisters(0x6064, 2);
+  if (result == node.ku8MBSuccess) {
+    uint16_t highWord = node.getResponseBuffer(0); // 高16位
+    uint16_t lowWord  = node.getResponseBuffer(1);  // 低16位
+    
+    // 合并为一个32位数据（注意数据的符号问题）
+    int32_t data = ((int32_t)highWord << 16) | lowWord;
+    currentAngle = data/ONE_ROLL*360;//记录初始角度，用于计算是否旋转了180°
+  }
+
+  if(targetPosition<currentAngle-originAngle-positionTolerance){
+    start=true;
+    useTrapezoidalProfile=!useTrapezoidalProfile;
+    delay(10000);
+    //可以写一些后续的其他操作……
+  }
+
 }
 
-// ------------------------ 模块函数实现 ------------------------
 
+
+
+
+// ------------------------ 模块函数实现 ------------------------
 // 硬件初始化模块
 void initHardware() {
   // 初始化串口调试
   Serial.begin(115200);
-  
   // 初始化 I2C 总线（用于 OLED 和 MPU6050）
   Wire.begin();
-  
   // 初始化 OLED 显示屏
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("OLED failed");
@@ -142,7 +309,6 @@ void initHardware() {
   }
   display.clearDisplay();
   display.display();
-
   // 初始化 MPU6050
   mpu.initialize();
   if (!mpu.testConnection()) {
@@ -174,10 +340,24 @@ void processRS485Communication() {
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   int16_t ax, ay, az, gx, gy, gz;
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  float targetSpeed, targetAcceleration;
 
   // 当前速度和加速度（假设由传感器获得，这里使用陀螺仪和加速度计的数据）
   float currentSpeed = gx;         // 以陀螺仪 x 轴数据作为当前速度
   float currentAcceleration = ax;    // 以加速度计 x 轴数据作为当前加速度
+  float currentTime = (millis()-offset) / 1000.0;  // 当前时间（秒）
+  
+  if (useTrapezoidalProfile) {
+    trapezoidal.updateProfile(currentTime, targetSpeed, targetAcceleration);
+  } else {
+    sCurve.updateProfile(currentTime, targetSpeed, targetAcceleration);
+  }
+  
+  Serial.print("Target Speed: ");
+  Serial.print(targetSpeed);
+  Serial.print(" deg/s, Target Acceleration: ");
+  Serial.print(targetAcceleration);
+  Serial.println(" deg/s²");
 
   // 使用PID计算修正值
   modifiedSpeed = pidSpeed.compute(targetSpeed, currentSpeed);
@@ -189,8 +369,59 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   Serial.println(az);
 }
 
+void processControl() {
+
+  if(useTrapezoidalProfile){
+    node.writeSingleRegister(0x2109, 1);
+    delay(50);
+    node.writeSingleRegister(0x2310, 0);
+    delay(50);
+    node.writeSingleRegister(0x2311, 0);
+    delay(50);
+    node.writeSingleRegister(0x2314, 3);
+    delay(50);
+    node.writeSingleRegister(0x2315, 1);
+    delay(50);
+    node.writeSingleRegister(0x2320, 62);//第1段位移
+    delay(50);
+    node.writeSingleRegister(0x2321, 15);//第1段目标速度
+    delay(50);
+    node.writeSingleRegister(0x2322, 5);//第1段加速度
+    delay(50);
+    node.writeSingleRegister(0x2323, 0);//第1段减速度
+    delay(50);
+    node.writeSingleRegister(0x2324, 50);//第1段完成后等待时间
+    delay(50);
+    node.writeSingleRegister(0x2325, 375);//第2段
+    delay(50);
+    node.writeSingleRegister(0x2326, 15);
+    delay(50);
+    node.writeSingleRegister(0x2327, 0);
+    delay(50);
+    node.writeSingleRegister(0x2328, 0);
+    delay(50);
+    node.writeSingleRegister(0x2329, 50);
+    delay(50);
+    node.writeSingleRegister(0x232A, 63);//第3段
+    delay(50);
+    node.writeSingleRegister(0x232B, 0);
+    delay(50);
+    node.writeSingleRegister(0x232C, 0);
+    delay(50);
+    node.writeSingleRegister(0x232D, 5);
+    delay(50);
+    node.writeSingleRegister(0x232E, 50);
+    delay(50);
+    node.writeSingleRegister(0x2300, 2);
+
+  }
+  else{
+
+  }
+}
+
 // 控制模块：根据传入的修改后的速度和加速度设置Modbus寄存器
-void processControl(float modifiedSpeed, float modifiedAcceleration) {
+void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
   // 设置为速度模式（寄存器 0x2109 设置为速度模式值 2）
   node.writeSingleRegister(0x2109, 2);
   delay(100);
@@ -204,15 +435,10 @@ void processControl(float modifiedSpeed, float modifiedAcceleration) {
   delay(100);
 
   // 打印输出
-  Serial.print("Target Position: ");
-  Serial.println(servoPosition);
   Serial.print("Modified Speed: ");
   Serial.println(modifiedSpeed);
   Serial.print("Modified Acceleration: ");
   Serial.println(modifiedAcceleration);
-
-  // 更新目标位置，保持循环
-  servoPosition = (servoPosition + 1) % 180;
 }
 
 // 显示模块：更新 OLED 显示内容
@@ -277,6 +503,8 @@ void handleCommand(String cmd) {
   }
 }
  
+
+//----------测试部分------------
 /**
  * 发送伺服电机调试命令
  */
@@ -318,90 +546,3 @@ void readServoResponse() {
     Serial.println("no response");
   }
 }
-
-/**
- * 更新梯形速度曲线下的目标速度和加速度
- * 参数:
- *  - t: 当前时间（秒）
- *  - t_acc: 加速阶段时间（秒）
- *  - t_const: 匀速阶段时间（秒）
- *  - t_dec: 减速阶段时间（秒）
- *  - maxSpeed: 目标最大速度（单位：例如度/秒或脉冲/秒）
- *  - a: 加速度（正值）
- *  - d: 减速度（正值）
- * 输出:
- *  - targetSpeed: 当前目标速度
- *  - targetAcceleration: 当前目标加速度
- */
-void updateTrapezoidalProfile(float t, float t_acc, float t_const, float t_dec, float maxSpeed, float a, float d,
-                              float &targetSpeed, float &targetAcceleration) {
-  if (t < t_acc) {
-    // 加速阶段：线性加速
-    targetAcceleration = a;
-    targetSpeed = a * t;
-  } else if (t < t_acc + t_const) {
-    // 匀速阶段：保持最大速度
-    targetAcceleration = 0;
-    targetSpeed = maxSpeed;
-  } else if (t < t_acc + t_const + t_dec) {
-    // 减速阶段：线性减速
-    float t_dec_phase = t - t_acc - t_const;
-    targetAcceleration = -d;
-    targetSpeed = maxSpeed - d * t_dec_phase;
-  } else {
-    // 运动结束：速度和加速度均为0
-    targetAcceleration = 0;
-    targetSpeed = 0;
-  }
-}
-
-/**
- * 更新 S 曲线加速阶段下的目标速度和加速度
- * 参数:
- *  - t: 当前时间（秒），t 范围在 [0, t_acc_total]
- *  - t_r: 加速斜坡上升时间（秒），在此阶段加速度从 0 增加到 A_max
- *  - t_const: 恒定加速度阶段时间（秒）
- *  - t_r_down: 加速斜坡下降时间（秒），在此阶段加速度从 A_max 降低到 0
- *  - A_max: 最大加速度
- * 输出:
- *  - targetSpeed: 当前目标速度（积分计算得到）
- *  - targetAcceleration: 当前目标加速度
- */
-void updateSCurveProfile(float t, float t_r, float t_const, float t_r_down, float A_max,
-                         float &targetSpeed, float &targetAcceleration) {
-  float t_acc_total = t_r + t_const + t_r_down;
-  if (t < t_r) {
-    // 斜坡上升阶段：加速度从 0 线性增加到 A_max
-    targetAcceleration = A_max * (t / t_r);
-    // 积分得到速度：速度 = 1/2 * A_max * (t^2 / t_r)
-    targetSpeed = 0.5 * A_max * (t * t / t_r);
-  } else if (t < t_r + t_const) {
-    // 恒定加速度阶段：加速度为 A_max
-    targetAcceleration = A_max;
-    // 先计算上升阶段累积的速度
-    float speed_ramp = 0.5 * A_max * t_r;
-    // 再加上当前恒加速阶段的速度增量
-    float t_const_phase = t - t_r;
-    targetSpeed = speed_ramp + A_max * t_const_phase;
-  } else if (t < t_acc_total) {
-    // 斜坡下降阶段：加速度从 A_max 线性降低到 0
-    float t_down = t - t_r - t_const;
-    targetAcceleration = A_max * (1 - t_down / t_r_down);
-    // 计算上面两段累积的速度
-    float speed_ramp = 0.5 * A_max * t_r;
-    float speed_const = A_max * t_const;
-    // 本阶段速度积分（近似计算）
-    float speed_ramp_down = A_max * t_down - 0.5 * A_max * (t_down * t_down / t_r_down);
-    targetSpeed = speed_ramp + speed_const + speed_ramp_down;
-  } else {
-    targetAcceleration = 0;
-    // 超出加速阶段时间后，目标速度可设为一个预定值或保持上一个值
-    // 这里简化处理为保持加速阶段最后的速度
-    float speed_ramp = 0.5 * A_max * t_r;
-    float speed_const = A_max * t_const;
-    float speed_ramp_down = A_max * t_r_down - 0.5 * A_max * t_r_down;  // = 0.5*A_max*t_r_down
-    targetSpeed = speed_ramp + speed_const + speed_ramp_down;
-  }
-}
-
-
