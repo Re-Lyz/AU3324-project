@@ -318,3 +318,90 @@ void readServoResponse() {
     Serial.println("no response");
   }
 }
+
+/**
+ * 更新梯形速度曲线下的目标速度和加速度
+ * 参数:
+ *  - t: 当前时间（秒）
+ *  - t_acc: 加速阶段时间（秒）
+ *  - t_const: 匀速阶段时间（秒）
+ *  - t_dec: 减速阶段时间（秒）
+ *  - maxSpeed: 目标最大速度（单位：例如度/秒或脉冲/秒）
+ *  - a: 加速度（正值）
+ *  - d: 减速度（正值）
+ * 输出:
+ *  - targetSpeed: 当前目标速度
+ *  - targetAcceleration: 当前目标加速度
+ */
+void updateTrapezoidalProfile(float t, float t_acc, float t_const, float t_dec, float maxSpeed, float a, float d,
+                              float &targetSpeed, float &targetAcceleration) {
+  if (t < t_acc) {
+    // 加速阶段：线性加速
+    targetAcceleration = a;
+    targetSpeed = a * t;
+  } else if (t < t_acc + t_const) {
+    // 匀速阶段：保持最大速度
+    targetAcceleration = 0;
+    targetSpeed = maxSpeed;
+  } else if (t < t_acc + t_const + t_dec) {
+    // 减速阶段：线性减速
+    float t_dec_phase = t - t_acc - t_const;
+    targetAcceleration = -d;
+    targetSpeed = maxSpeed - d * t_dec_phase;
+  } else {
+    // 运动结束：速度和加速度均为0
+    targetAcceleration = 0;
+    targetSpeed = 0;
+  }
+}
+
+/**
+ * 更新 S 曲线加速阶段下的目标速度和加速度
+ * 参数:
+ *  - t: 当前时间（秒），t 范围在 [0, t_acc_total]
+ *  - t_r: 加速斜坡上升时间（秒），在此阶段加速度从 0 增加到 A_max
+ *  - t_const: 恒定加速度阶段时间（秒）
+ *  - t_r_down: 加速斜坡下降时间（秒），在此阶段加速度从 A_max 降低到 0
+ *  - A_max: 最大加速度
+ * 输出:
+ *  - targetSpeed: 当前目标速度（积分计算得到）
+ *  - targetAcceleration: 当前目标加速度
+ */
+void updateSCurveProfile(float t, float t_r, float t_const, float t_r_down, float A_max,
+                         float &targetSpeed, float &targetAcceleration) {
+  float t_acc_total = t_r + t_const + t_r_down;
+  if (t < t_r) {
+    // 斜坡上升阶段：加速度从 0 线性增加到 A_max
+    targetAcceleration = A_max * (t / t_r);
+    // 积分得到速度：速度 = 1/2 * A_max * (t^2 / t_r)
+    targetSpeed = 0.5 * A_max * (t * t / t_r);
+  } else if (t < t_r + t_const) {
+    // 恒定加速度阶段：加速度为 A_max
+    targetAcceleration = A_max;
+    // 先计算上升阶段累积的速度
+    float speed_ramp = 0.5 * A_max * t_r;
+    // 再加上当前恒加速阶段的速度增量
+    float t_const_phase = t - t_r;
+    targetSpeed = speed_ramp + A_max * t_const_phase;
+  } else if (t < t_acc_total) {
+    // 斜坡下降阶段：加速度从 A_max 线性降低到 0
+    float t_down = t - t_r - t_const;
+    targetAcceleration = A_max * (1 - t_down / t_r_down);
+    // 计算上面两段累积的速度
+    float speed_ramp = 0.5 * A_max * t_r;
+    float speed_const = A_max * t_const;
+    // 本阶段速度积分（近似计算）
+    float speed_ramp_down = A_max * t_down - 0.5 * A_max * (t_down * t_down / t_r_down);
+    targetSpeed = speed_ramp + speed_const + speed_ramp_down;
+  } else {
+    targetAcceleration = 0;
+    // 超出加速阶段时间后，目标速度可设为一个预定值或保持上一个值
+    // 这里简化处理为保持加速阶段最后的速度
+    float speed_ramp = 0.5 * A_max * t_r;
+    float speed_const = A_max * t_const;
+    float speed_ramp_down = A_max * t_r_down - 0.5 * A_max * t_r_down;  // = 0.5*A_max*t_r_down
+    targetSpeed = speed_ramp + speed_const + speed_ramp_down;
+  }
+}
+
+
