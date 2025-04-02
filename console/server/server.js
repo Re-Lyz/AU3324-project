@@ -40,8 +40,8 @@ wss.on('connection', (ws) => {
 
     // 发送当前蓝牙状态和最新数据
     sendInitialData(ws);
-    
     ws.on('close', () => {
+        clearInterval(statusInterval);
         console.log('Client disconnected');
     });
 });
@@ -141,8 +141,7 @@ app.post('/api/rotate', (req, res) => {
         });
     }
 
-    const command = 'ROTATE\n';  // 与ESP32代码中的命令一致
-    
+    const command = 'ROTATE\n';  
     bluetoothState.btSerial.write(Buffer.from(command), (err) => {
         if (err) {
             console.error('Write error:', err);
