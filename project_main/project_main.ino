@@ -10,7 +10,7 @@
 // OLED 屏幕参数
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define OLED_RESET    -1
+#define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // RS485 通信波特率
 #define RS485_BAUD 115200
@@ -28,9 +28,10 @@ bool useTrapezoidalProfile = true;
 bool start = true;
 float originAngle;
 float currentAngle;
+float sensitivity;
 
-const float targetPosition = 180.0;      // 目标旋转角度，单位：度
-const float positionTolerance = 0.5;       // 允许的误差范围，单位：度
+const float targetPosition = 180.0;   // 目标旋转角度，单位：度
+const float positionTolerance = 0.5;  // 允许的误差范围，单位：度
 unsigned long offset = 0;
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
@@ -43,169 +44,172 @@ void processWireless();
 void sendServoCommand();
 void readServoResponse();
 void handleCommand(String cmd);
+void stopServo();
+void debug();
 
 // PID控制器类
 class PID {
 public:
   // 构造函数，初始化PID常数
-  PID(float p, float i, float d) : kp(p), ki(i), kd(d), prevError(0), integral(0) {}
+  PID(float p, float i, float d)
+    : kp(p), ki(i), kd(d), prevError(0), integral(0) {}
 
   // 计算PID控制输出
   float compute(float setpoint, float input) {
-    float error = setpoint - input;           // 计算误差
-    float pTerm = kp * error;                   // 比例项
-    integral += error;                          // 积分累加
-    float iTerm = ki * integral;                // 积分项
-    float dTerm = kd * (error - prevError);       // 微分项
-    float output = pTerm + iTerm + dTerm;         // 计算PID输出
-    prevError = error;                          // 更新前一误差
+    float error = setpoint - input;          // 计算误差
+    float pTerm = kp * error;                // 比例项
+    integral += error;                       // 积分累加
+    float iTerm = ki * integral;             // 积分项
+    float dTerm = kd * (error - prevError);  // 微分项
+    float output = pTerm + iTerm + dTerm;    // 计算PID输出
+    prevError = error;                       // 更新前一误差
     return output;
   }
 
 private:
-  float kp;      // 比例常数
-  float ki;      // 积分常数
-  float kd;      // 微分常数
-  float prevError; // 上一次的误差
-  float integral;  // 积分值
+  float kp;         // 比例常数
+  float ki;         // 积分常数
+  float kd;         // 微分常数
+  float prevError;  // 上一次的误差
+  float integral;   // 积分值
 };
 
 // PID控制器实例
 PID pidSpeed(1.0, 0.1, 0.05);         // 用于速度控制的PID
-PID pidAcceleration(1.0, 0.1, 0.05);    // 用于加减速控制的PID
+PID pidAcceleration(1.0, 0.1, 0.05);  // 用于加减速控制的PID
 
 class TrapezoidalProfile {
-  private:
-    float t_acc;     // 加速阶段时间（秒）
-    float t_const;   // 匀速阶段时间（秒）
-    float t_dec;     // 减速阶段时间（秒）
-    float maxSpeed;  // 最大速度（°/s）
-    float a;         // 加速度（°/s²）
-    float d;         // 减速度（°/s²）
-    
-  public:
-    // 构造函数，固定基本参数
-    TrapezoidalProfile(float t_acc, float t_const, float t_dec, float maxSpeed, float a, float d) {
-      this->t_acc = t_acc;
-      this->t_const = t_const;
-      this->t_dec = t_dec;
-      this->maxSpeed = maxSpeed;
-      this->a = a;
-      this->d = d;
+private:
+  float t_acc;     // 加速阶段时间（秒）
+  float t_const;   // 匀速阶段时间（秒）
+  float t_dec;     // 减速阶段时间（秒）
+  float maxSpeed;  // 最大速度（°/s）
+  float a;         // 加速度（°/s²）
+  float d;         // 减速度（°/s²）
+
+public:
+  // 构造函数，固定基本参数
+  TrapezoidalProfile(float t_acc, float t_const, float t_dec, float maxSpeed, float a, float d) {
+    this->t_acc = t_acc;
+    this->t_const = t_const;
+    this->t_dec = t_dec;
+    this->maxSpeed = maxSpeed;
+    this->a = a;
+    this->d = d;
+  }
+
+  // 根据当前时间 t 计算目标速度和加速度
+  void updateProfile(float t, float &targetSpeed, float &targetAcceleration) {
+    if (t < t_acc) {
+      // 加速阶段：线性加速
+      targetAcceleration = a;
+      targetSpeed = a * 0.1 * 60 * t;
+    } else if (t < t_acc + t_const) {
+      // 匀速阶段
+      targetAcceleration = 0;
+      targetSpeed = maxSpeed;
+    } else if (t < t_acc + t_const + t_dec) {
+      // 减速阶段：线性减速
+      float t_dec_phase = t - t_acc - t_const;
+      targetAcceleration = -d;
+      targetSpeed = maxSpeed - d * 0.1 * 60 * t_dec_phase;
+    } else {
+      // 运动结束，速度和加速度归零
+      targetAcceleration = 0;
+      targetSpeed = 0;
     }
-    
-    // 根据当前时间 t 计算目标速度和加速度
-    void updateProfile(float t, float &targetSpeed, float &targetAcceleration) {
-      if (t < t_acc) {
-        // 加速阶段：线性加速
-        targetAcceleration = a;
-        targetSpeed = a * t;
-      } else if (t < t_acc + t_const) {
-        // 匀速阶段
-        targetAcceleration = 0;
-        targetSpeed = maxSpeed;
-      } else if (t < t_acc + t_const + t_dec) {
-        // 减速阶段：线性减速
-        float t_dec_phase = t - t_acc - t_const;
-        targetAcceleration = -d;
-        targetSpeed = maxSpeed - d * t_dec_phase;
-      } else {
-        // 运动结束，速度和加速度归零
-        targetAcceleration = 0;
-        targetSpeed = 0;
-      }
-    }
+  }
 };
 
 class SCurveProfile {
-  private:
-    float t_r;       // 上升斜坡阶段时间（秒）
-    float t_const;   // 恒定加速度阶段时间（秒）
-    float t_r_down;  // 下降斜坡阶段时间（秒）
-    float A_max;     // 最大加速度（°/s²）
-    float t_cv;      // 匀速阶段持续时间（秒）
-    float T_acc;     // 加速阶段总时间 = t_r + t_const + t_r_down
-    float V_max;     // 最大速度（加速阶段结束时），计算公式：0.5*A_max*t_r + A_max*t_const + 0.5*A_max*t_r_down
-    
-    // 辅助函数：计算加速阶段（0 ≤ t ≤ T_acc）的目标速度和加速度
-    void accelerationPhase(float t, float &speed, float &acceleration) {
-      if (t < t_r) {
-        // 上升斜坡阶段：加速度从 0 线性增加到 A_max
-        acceleration = A_max * (t / t_r);
-        speed = 0.5 * A_max * (t * t / t_r);
-      } else if (t < t_r + t_const) {
-        // 恒定加速度阶段：加速度恒定为 A_max
-        acceleration = A_max;
-        float speed_ramp = 0.5 * A_max * t_r;  // 上升阶段累计速度
-        float t_const_phase = t - t_r;
-        speed = speed_ramp + A_max * t_const_phase;
-      } else if (t < T_acc) {
-        // 下降斜坡阶段：加速度从 A_max 线性下降到 0
-        float t_down = t - t_r - t_const;
-        acceleration = A_max * (1 - t_down / t_r_down);
-        float speed_ramp = 0.5 * A_max * t_r;
-        float speed_const = A_max * t_const;
-        float speed_ramp_down = A_max * t_down - 0.5 * A_max * (t_down * t_down / t_r_down);
-        speed = speed_ramp + speed_const + speed_ramp_down;
-      } else {
-        acceleration = 0;
-        speed = V_max;
-      }
+private:
+  float t_r;       // 上升斜坡阶段时间（秒）
+  float t_const;   // 恒定加速度阶段时间（秒）
+  float t_r_down;  // 下降斜坡阶段时间（秒）
+  float A_max;     // 最大加速度（°/s²）
+  float t_cv;      // 匀速阶段持续时间（秒）
+  float T_acc;     // 加速阶段总时间 = t_r + t_const + t_r_down
+  float V_max;     // 最大速度（加速阶段结束时），计算公式：0.5*A_max*t_r + A_max*t_const + 0.5*A_max*t_r_down
+
+  // 辅助函数：计算加速阶段（0 ≤ t ≤ T_acc）的目标速度和加速度
+  void accelerationPhase(float t, float &speed, float &acceleration) {
+    if (t < t_r) {
+      // 上升斜坡阶段：加速度从 0 线性增加到 A_max
+      acceleration = A_max * (t / t_r);
+      speed = 0.5 * A_max * (t * t / t_r);
+    } else if (t < t_r + t_const) {
+      // 恒定加速度阶段：加速度恒定为 A_max
+      acceleration = A_max;
+      float speed_ramp = 0.5 * A_max * t_r;  // 上升阶段累计速度
+      float t_const_phase = t - t_r;
+      speed = speed_ramp + A_max * t_const_phase;
+    } else if (t < T_acc) {
+      // 下降斜坡阶段：加速度从 A_max 线性下降到 0
+      float t_down = t - t_r - t_const;
+      acceleration = A_max * (1 - t_down / t_r_down);
+      float speed_ramp = 0.5 * A_max * t_r;
+      float speed_const = A_max * t_const;
+      float speed_ramp_down = A_max * t_down - 0.5 * A_max * (t_down * t_down / t_r_down);
+      speed = speed_ramp + speed_const + speed_ramp_down;
+    } else {
+      acceleration = 0;
+      speed = V_max;
     }
-    
-  public:
-    // 构造函数：固定基本参数
-    // t_r, t_const, t_r_down 为加速阶段参数，A_max 为最大加速度，
-    // t_cv 为匀速阶段时间。减速阶段与加速阶段对称。
-    SCurveProfile(float t_r, float t_const, float t_r_down, float A_max, float t_cv) {
-      this->t_r = t_r;
-      this->t_const = t_const;
-      this->t_r_down = t_r_down;
-      this->A_max = A_max;
-      this->t_cv = t_cv;
-      T_acc = t_r + t_const + t_r_down;
-      V_max = 0.5 * A_max * t_r + A_max * t_const + 0.5 * A_max * t_r_down;
+  }
+
+public:
+  // 构造函数：固定基本参数
+  // t_r, t_const, t_r_down 为加速阶段参数，A_max 为最大加速度，
+  // t_cv 为匀速阶段时间。减速阶段与加速阶段对称。
+  SCurveProfile(float t_r, float t_const, float t_r_down, float A_max, float t_cv) {
+    this->t_r = t_r;
+    this->t_const = t_const;
+    this->t_r_down = t_r_down;
+    this->A_max = A_max;
+    this->t_cv = t_cv;
+    T_acc = t_r + t_const + t_r_down;
+    V_max = 0.5 * A_max * t_r + A_max * t_const + 0.5 * A_max * t_r_down;
+  }
+
+  // 根据当前时间 t（单位：秒）计算整个 S 曲线运动的目标速度和加速度
+  // 整个运动分为：加速阶段（0 ≤ t < T_acc）、匀速阶段（T_acc ≤ t < T_acc + t_cv）、
+  // 以及减速阶段（T_acc + t_cv ≤ t < 2*T_acc + t_cv）。
+  void updateProfile(float t, float &targetSpeed, float &targetAcceleration) {
+    float T_total = 2 * T_acc + t_cv;
+    if (t < 0) {
+      targetSpeed = 0;
+      targetAcceleration = 0;
+    } else if (t < T_acc) {
+      // 加速阶段
+      accelerationPhase(t, targetSpeed, targetAcceleration);
+    } else if (t < T_acc + t_cv) {
+      // 匀速阶段
+      targetSpeed = V_max;
+      targetAcceleration = 0;
+    } else if (t < T_total) {
+      // 减速阶段：对称于加速阶段
+      float t_dec = t - (T_acc + t_cv);  // 当前减速阶段时间
+      float t_mirror = T_acc - t_dec;    // 对称于加速阶段
+      float speed_mirror, accel_mirror;
+      accelerationPhase(t_mirror, speed_mirror, accel_mirror);
+      targetSpeed = V_max - speed_mirror;
+      targetAcceleration = -accel_mirror;
+    } else {
+      // 运动结束
+      targetSpeed = 0;
+      targetAcceleration = 0;
     }
-    
-    // 根据当前时间 t（单位：秒）计算整个 S 曲线运动的目标速度和加速度
-    // 整个运动分为：加速阶段（0 ≤ t < T_acc）、匀速阶段（T_acc ≤ t < T_acc + t_cv）、
-    // 以及减速阶段（T_acc + t_cv ≤ t < 2*T_acc + t_cv）。
-    void updateProfile(float t, float &targetSpeed, float &targetAcceleration) {
-      float T_total = 2 * T_acc + t_cv;
-      if (t < 0) {
-        targetSpeed = 0;
-        targetAcceleration = 0;
-      } else if (t < T_acc) {
-        // 加速阶段
-        accelerationPhase(t, targetSpeed, targetAcceleration);
-      } else if (t < T_acc + t_cv) {
-        // 匀速阶段
-        targetSpeed = V_max;
-        targetAcceleration = 0;
-      } else if (t < T_total) {
-        // 减速阶段：对称于加速阶段
-        float t_dec = t - (T_acc + t_cv);     // 当前减速阶段时间
-        float t_mirror = T_acc - t_dec;         // 对称于加速阶段
-        float speed_mirror, accel_mirror;
-        accelerationPhase(t_mirror, speed_mirror, accel_mirror);
-        targetSpeed = V_max - speed_mirror;
-        targetAcceleration = -accel_mirror;
-      } else {
-        // 运动结束
-        targetSpeed = 0;
-        targetAcceleration = 0;
-      }
-    }
+  }
 };
 
-TrapezoidalProfile trapezoidal(5.0, 20.0, 5.0, 7.2, 1.44, 1.44);
+TrapezoidalProfile trapezoidal(0.3333, 1.1667, 0.3333, 20, 10, 10);
 SCurveProfile sCurve(2.0, 3.0, 2.0, 1.736, 16.0);
 
 // ------------------------ setup() 函数 ------------------------
 void setup() {
   initHardware();
 
-  uint8_t result = node.readHoldingRegisters(0x606C, 2);
+  uint8_t result = node.readHoldingRegisters(0x2035, 2);
   if (result == node.ku8MBSuccess) {
     Serial.println("Read registers successfully:");
     Serial.print("Register 0: ");
@@ -217,78 +221,81 @@ void setup() {
     Serial.println(result);
   }
 
-  node.writeSingleRegister(0x2109, 1);  // 设置为位置模式
-  delay(100);
-  node.writeSingleRegister(0x2310, 2);
-  delay(100);
-  node.writeSingleRegister(0x2311, 1);  
-  delay(100);
-  node.writeSingleRegister(0x2320, 1000); 
-  delay(100);
-  node.writeSingleRegister(0x2321, 100);  // 设定目标速度为 500 rpm
-  delay(100);
-  node.writeSingleRegister(0x2322, 10);   // 设定加速度为 10 rps/s
-  delay(100);
-  node.writeSingleRegister(0x2323, 10);   // 设定减速度为 10 rps/s
-  delay(100);
-  node.writeSingleRegister(0x2316, 0);    // 运动触发信号设定为 ON
-  delay(100);
-  node.writeSingleRegister(0x2316, 1);    // 运动触发信号设定为 ON
-  delay(100);
-  currentAngle = 0;
+  //初始化参数
+  start = true;
+  useTrapezoidalProfile = true;
+  uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
+  switch(ScaleGyroRange) {
+    case 0: sensitivity = 131.0; break;  // ±250°/s
+    case 1: sensitivity = 65.5; break;   // ±500°/s
+    case 2: sensitivity = 32.8; break;   // ±1000°/s
+    case 3: sensitivity = 16.4; break;   // ±2000°/s
+    default: sensitivity = 131.0; break;
+  }
+  Serial.print("灵敏度：");
+  Serial.println(sensitivity);
 
+  //是否测试电机  
+  if (debugmode) {
+    debug();
+  }
 }
 
 // ------------------------ loop() 函数 ------------------------
 void loop() {
-  if (debugmode) {
-    // 发送调试命令给伺服电机
-    sendServoCommand();
-    delay(50);  // 等待伺服电机响应
-    readServoResponse();
-    delay(1000);  // 每隔一段时间发送一次调试命令
-  }
+
   float modifiedSpeed, modifiedAcceleration;
 
   if (start) {
     processControl();
     start = false;
-    offset = millis();//记录初始时间，用于计算当前时间的理论速度和加速度
+    offset = millis();  //记录初始时间，用于计算当前时间的理论速度和加速度
+    Serial.print("初始时间：");
+    Serial.println(offset / 1000);
+
     uint8_t result = node.readHoldingRegisters(0x6064, 2);
     if (result == node.ku8MBSuccess) {
-      uint16_t highWord = node.getResponseBuffer(0); // 高16位
-      uint16_t lowWord  = node.getResponseBuffer(1);  // 低16位
-      
+      uint16_t highWord = node.getResponseBuffer(0);  // 高16位
+      uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
+
       // 合并为一个32位数据（注意数据的符号问题）
       int32_t data = ((int32_t)highWord << 16) | lowWord;
-      originAngle = data/ONE_ROLL*360;//记录初始角度，用于计算是否旋转了180°
+      originAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
     }
+    Serial.print("初始角度：");
+    Serial.println(originAngle);
   }
 
-  // processSensors(modifiedSpeed, modifiedAcceleration);
+  //processSensors(modifiedSpeed, modifiedAcceleration);
   // regulateControl(modifiedSpeed, modifiedAcceleration);
-  processRS485Communication();
 
   processDisplay();
   processWireless();
 
   uint8_t result = node.readHoldingRegisters(0x6064, 2);
   if (result == node.ku8MBSuccess) {
-    uint16_t highWord = node.getResponseBuffer(0); // 高16位
-    uint16_t lowWord  = node.getResponseBuffer(1);  // 低16位
-    
+    uint16_t highWord = node.getResponseBuffer(0);  // 高16位
+    uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
+
     // 合并为一个32位数据（注意数据的符号问题）
     int32_t data = ((int32_t)highWord << 16) | lowWord;
-    currentAngle = data/ONE_ROLL*360;//记录初始角度，用于计算是否旋转了180°
+    currentAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
   }
 
-  if(targetPosition<currentAngle-originAngle-positionTolerance){
-    start=true;
-    useTrapezoidalProfile=!useTrapezoidalProfile;
+  if (targetPosition < currentAngle - originAngle - positionTolerance) {
+    start = true;
+    useTrapezoidalProfile = !useTrapezoidalProfile;
+    stopServo();
+    Serial.print("当前角度：");
+    Serial.println(currentAngle);
     delay(10000);
+    node.writeSingleRegister(0x2301, 1); 
+    delay(50);
+    node.writeSingleRegister(0x2300, 2);
+    delay(50);
+
     //可以写一些后续的其他操作……
   }
-
 }
 
 
@@ -305,7 +312,8 @@ void initHardware() {
   // 初始化 OLED 显示屏
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("OLED failed");
-    while (1);
+    while (1)
+      ;
   }
   display.clearDisplay();
   display.display();
@@ -329,30 +337,38 @@ void initHardware() {
     Serial.println("蓝牙已就绪，名称: ESP32_Servo");
     SerialBT.setPin("1234", 4);  // 设置配对密码
   }
-} // end of initHardware
-
-// RS485通信处理模块
-void processRS485Communication() {
-  Serial.println("RS485 communication processing...");
-}
+}  // end of initHardware
 
 // 传感器模块：读取 MPU6050 数据并计算PID调整值
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   int16_t ax, ay, az, gx, gy, gz;
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
+  uint8_t ScaleAccelRange = mpu.getFullScaleAccelRange();
+
   float targetSpeed, targetAcceleration;
 
   // 当前速度和加速度（假设由传感器获得，这里使用陀螺仪和加速度计的数据）
-  float currentSpeed = gx;         // 以陀螺仪 x 轴数据作为当前速度
-  float currentAcceleration = ax;    // 以加速度计 x 轴数据作为当前加速度
-  float currentTime = (millis()-offset) / 1000.0;  // 当前时间（秒）
-  
+  float currentSpeed = gx/sensitivity/6;                           // 以陀螺仪 x 轴数据作为当前速度
+  float currentAcceleration = ax;                    // 以加速度计 x 轴数据作为当前加速度
+  float currentTime = (millis() - offset) / 1000.0;  // 当前时间（秒）
+
+  uint8_t result = node.readHoldingRegisters(0x606C, 2);
+  if (result == node.ku8MBSuccess) {
+    uint16_t highWord = node.getResponseBuffer(0);  // 高16位
+    uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
+    // 合并为一个32位数据（注意数据的符号问题）
+    int32_t data = ((int32_t)highWord << 16) | lowWord;
+    originAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
+  }  
+
+
   if (useTrapezoidalProfile) {
     trapezoidal.updateProfile(currentTime, targetSpeed, targetAcceleration);
   } else {
     sCurve.updateProfile(currentTime, targetSpeed, targetAcceleration);
   }
-  
+
   Serial.print("Target Speed: ");
   Serial.print(targetSpeed);
   Serial.print(" deg/s, Target Acceleration: ");
@@ -364,59 +380,164 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   modifiedAcceleration = pidAcceleration.compute(targetAcceleration, currentAcceleration);
 
   Serial.print("Acceleration: ");
-  Serial.print(ax); Serial.print(", ");
-  Serial.print(ay); Serial.print(", ");
+  Serial.print(ax);
+  Serial.print(", ");
+  Serial.print(ay);
+  Serial.print(", ");
   Serial.println(az);
 }
 
 void processControl() {
 
-  if(useTrapezoidalProfile){
+  if (useTrapezoidalProfile) {
     node.writeSingleRegister(0x2109, 1);
     delay(50);
     node.writeSingleRegister(0x2310, 0);
     delay(50);
     node.writeSingleRegister(0x2311, 0);
     delay(50);
-    node.writeSingleRegister(0x2314, 3);
+    node.writeSingleRegister(0x2314, 4);
     delay(50);
     node.writeSingleRegister(0x2315, 1);
     delay(50);
-    node.writeSingleRegister(0x2320, 62);//第1段位移
+
+    int32_t displacement = 60;  // 第1段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
     delay(50);
-    node.writeSingleRegister(0x2321, 15);//第1段目标速度
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x2321, 20);  //第1段目标速度
     delay(50);
-    node.writeSingleRegister(0x2322, 5);//第1段加速度
+    node.writeSingleRegister(0x2322, 10);  //第1段加速度
     delay(50);
-    node.writeSingleRegister(0x2323, 0);//第1段减速度
+    node.writeSingleRegister(0x2323, 0);  //第1段减速度
     delay(50);
-    node.writeSingleRegister(0x2324, 50);//第1段完成后等待时间
+    node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
     delay(50);
-    node.writeSingleRegister(0x2325, 375);//第2段
+
+    displacement = 390;  // 第2段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x2325, 2);
     delay(50);
-    node.writeSingleRegister(0x2326, 15);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x2326, 20);
     delay(50);
     node.writeSingleRegister(0x2327, 0);
     delay(50);
     node.writeSingleRegister(0x2328, 0);
     delay(50);
-    node.writeSingleRegister(0x2329, 50);
+    node.writeSingleRegister(0x2329, 0);
     delay(50);
-    node.writeSingleRegister(0x232A, 63);//第3段
+
+    displacement = 50;  // 第3段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x232A, 2);
     delay(50);
-    node.writeSingleRegister(0x232B, 0);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x232B, 1);
     delay(50);
     node.writeSingleRegister(0x232C, 0);
     delay(50);
-    node.writeSingleRegister(0x232D, 5);
+    node.writeSingleRegister(0x232D, 10);
     delay(50);
-    node.writeSingleRegister(0x232E, 50);
+    node.writeSingleRegister(0x232E, 0);
     delay(50);
+
+    displacement = 0;  // 第4段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x232F, 2);
+    delay(50);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x2330, 0);
+    delay(50);
+    node.writeSingleRegister(0x2331, 0);
+    delay(50);
+    node.writeSingleRegister(0x2332, 1);
+    delay(50);
+    node.writeSingleRegister(0x2333, 1000);
+    delay(50);
+
     node.writeSingleRegister(0x2300, 2);
+    delay(50);
+  } else {
+    //UNDO：修改为s曲线模式
+    node.writeSingleRegister(0x2109, 1);
+    delay(50);
+    node.writeSingleRegister(0x2310, 0);
+    delay(50);
+    node.writeSingleRegister(0x2311, 0);
+    delay(50);
+    node.writeSingleRegister(0x2314, 4);
+    delay(50);
+    node.writeSingleRegister(0x2315, 1);
+    delay(50);
 
-  }
-  else{
+    int32_t displacement = 60;  // 第1段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+    delay(50);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x2321, 20);  //第1段目标速度
+    delay(50);
+    node.writeSingleRegister(0x2322, 10);  //第1段加速度
+    delay(50);
+    node.writeSingleRegister(0x2323, 0);  //第1段减速度
+    delay(50);
+    node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
+    delay(50);
 
+    displacement = 390;  // 第2段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x2325, 2);
+    delay(50);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x2326, 20);
+    delay(50);
+    node.writeSingleRegister(0x2327, 0);
+    delay(50);
+    node.writeSingleRegister(0x2328, 0);
+    delay(50);
+    node.writeSingleRegister(0x2329, 0);
+    delay(50);
+
+    displacement = 60;  // 第3段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x232A, 2);
+    delay(50);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x232B, 1);
+    delay(50);
+    node.writeSingleRegister(0x232C, 0);
+    delay(50);
+    node.writeSingleRegister(0x232D, 10);
+    delay(50);
+    node.writeSingleRegister(0x232E, 0);
+    delay(50);
+
+    displacement = 0;  // 第4段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x232F, 2);
+    delay(50);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x2330, 0);
+    delay(50);
+    node.writeSingleRegister(0x2331, 0);
+    delay(50);
+    node.writeSingleRegister(0x2332, 1);
+    delay(50);
+    node.writeSingleRegister(0x2333, 1000);
+    delay(50);
+
+    node.writeSingleRegister(0x2300, 2);
+    delay(50);
   }
 }
 
@@ -441,28 +562,39 @@ void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
   Serial.println(modifiedAcceleration);
 }
 
+void stopServo() {
+  node.writeSingleRegister(0x2300, 1);
+  delay(50);
+  node.writeSingleRegister(0x2010, 1);//复位操作
+  delay(50);
+  node.writeSingleRegister(0x200A, 1);//恢复出厂设置
+  delay(50);
+  node.writeSingleRegister(0x2101, 1);//位置清零
+  delay(50);
+}
+
 // 显示模块：更新 OLED 显示内容
 void processDisplay() {
   display.clearDisplay();
- 
+
   int16_t ax, ay, az;
   float AccXangle;
   mpu.getAcceleration(&ax, &ay, &az);
- 
+
   // 计算 X 轴角度
   AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
- 
+
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
   display.print("Angle X: ");
   display.println(AccXangle);
- 
+
   // 显示蓝牙连接状态
   display.setCursor(0, 56);
   display.print("BT: ");
   display.print(btConnected ? "Connected" : "Available");
- 
+
   // 绘制指示线
   int x_center = SCREEN_WIDTH / 2;
   int y_center = SCREEN_HEIGHT / 2;
@@ -471,19 +603,19 @@ void processDisplay() {
   int x_end = x_center + line_length * sin(angle_rad);
   int y_end = y_center - line_length * cos(angle_rad);
   display.drawLine(x_center, y_center, x_end, y_end, SSD1306_WHITE);
- 
+
   display.display();
 }
 
 // 无线通信模块
 void processWireless() {
-  Serial.println("无线通信任务处理中...");
+  //Serial.println("无线通信任务处理中...");
   bool currentConnected = SerialBT.hasClient();
   if (currentConnected != btConnected) {
     btConnected = currentConnected;
     Serial.println(btConnected ? "蓝牙已连接" : "蓝牙已断开");
   }
- 
+
   if (SerialBT.available()) {
     String command = SerialBT.readStringUntil('\n');
     command.trim();
@@ -492,7 +624,7 @@ void processWireless() {
     handleCommand(command);
   }
 }
- 
+
 // 消费蓝牙消息（使用 if/else 处理 String 命令）
 void handleCommand(String cmd) {
   if (cmd.equals("ROTATE")) {
@@ -502,27 +634,34 @@ void handleCommand(String cmd) {
     Serial.println(cmd);
   }
 }
- 
+
 
 //----------测试部分------------
+void debug() {
+  // 发送调试命令给伺服电机
+  sendServoCommand();
+  delay(50);  // 等待伺服电机响应
+  readServoResponse();
+  delay(1000);
+  stopServo();
+}
+
 /**
  * 发送伺服电机调试命令
  */
 void sendServoCommand() {
 
-  node.writeSingleRegister(0x2109, 2);  // 设置为位置模式
+  node.writeSingleRegister(0x2109, 2);  // 设置模式
   delay(50);
-  node.writeSingleRegister(0x2380, 2); 
+  node.writeSingleRegister(0x2380, 2);
   delay(50);
-  node.writeSingleRegister(0x2385, 100); 
+  node.writeSingleRegister(0x2385, 100);
   delay(50);
-  node.writeSingleRegister(0x2390, 500);  // 设定目标速度为 500 rpm
+  node.writeSingleRegister(0x2390, 100);  // 设定目标速度
   delay(50);
-  node.writeSingleRegister(0x2384, 1);   // 设定加速度为 10 rps/s
-  delay(5000);
-  uint8_t result = node.writeSingleRegister(0x2384, 0);   // 设定加速度为 10 rps/s
+  uint8_t result = node.writeSingleRegister(0x2384, 0);  // 设定加速度为 10 rps/s
   delay(50);
-  
+
   if (result == node.ku8MBSuccess) {
     Serial.println("Command sent successfully.");
   } else {
@@ -530,7 +669,7 @@ void sendServoCommand() {
     Serial.println(result);
   }
 }
- 
+
 /**
  * 读取伺服电机响应数据并输出到串口监视器
  */
