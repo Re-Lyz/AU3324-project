@@ -266,7 +266,7 @@ void loop() {
     Serial.println(originAngle);
   }
 
-  //processSensors(modifiedSpeed, modifiedAcceleration);
+  processSensors(modifiedSpeed, modifiedAcceleration);
   // regulateControl(modifiedSpeed, modifiedAcceleration);
 
   processDisplay();
@@ -329,6 +329,14 @@ void initHardware() {
   Serial2.begin(RS485_BAUD, SERIAL_8N1, 17, 16);
   node.begin(01, Serial2);
   Serial.println("Modbus RTU initialization complete.");
+  node.writeSingleRegister(0x2008, 1);//复位操作
+  delay(50);
+  node.writeSingleRegister(0x2010, 1);//复位操作
+  delay(50);
+  node.writeSingleRegister(0x200A, 1);//恢复出厂设置
+  delay(50);
+  node.writeSingleRegister(0x2101, 1);//位置清零
+  delay(50);
 
   // 蓝牙初始化
   if (!SerialBT.begin("ESP32_Servo")) {  // 设备名称
@@ -339,28 +347,37 @@ void initHardware() {
   }
 }  // end of initHardware
 
-// 传感器模块：读取 MPU6050 数据并计算PID调整值
+// 传感器模块：读取速度并计算PID调整值
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
-  int16_t ax, ay, az, gx, gy, gz;
-  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-  uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
-  uint8_t ScaleAccelRange = mpu.getFullScaleAccelRange();
-
+  // int16_t ax, ay, az, gx, gy, gz;
+  // mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  // uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
+  // uint8_t ScaleAccelRange = mpu.getFullScaleAccelRange();
   float targetSpeed, targetAcceleration;
 
-  // 当前速度和加速度（假设由传感器获得，这里使用陀螺仪和加速度计的数据）
-  float currentSpeed = gx/sensitivity/6;                           // 以陀螺仪 x 轴数据作为当前速度
-  float currentAcceleration = ax;                    // 以加速度计 x 轴数据作为当前加速度
-  float currentTime = (millis() - offset) / 1000.0;  // 当前时间（秒）
-
+  // 当前速度和加速度
+  float currentSpeed;                          
+  float currentAcceleration;                 
   uint8_t result = node.readHoldingRegisters(0x606C, 2);
   if (result == node.ku8MBSuccess) {
     uint16_t highWord = node.getResponseBuffer(0);  // 高16位
     uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
-    // 合并为一个32位数据（注意数据的符号问题）
     int32_t data = ((int32_t)highWord << 16) | lowWord;
-    originAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
-  }  
+    currentSpeed = data;  
+  }
+  delay(10);  
+  result = node.readHoldingRegisters(0x606C, 2);
+  if (result == node.ku8MBSuccess) {
+    uint16_t highWord = node.getResponseBuffer(0);  // 高16位
+    uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
+    int32_t data = ((int32_t)highWord << 16) | lowWord;
+    currentAcceleration = (data-currentSpeed)*10000/(60*50);  
+  }
+  float currentTime = (millis() - offset) / 1000.0;  // 当前时间（秒）
+  Serial.print("currentSpeed:");
+  Serial.println(currentSpeed);
+  Serial.print("currentAcceleration:");
+  Serial.println(currentAcceleration);
 
 
   if (useTrapezoidalProfile) {
@@ -370,97 +387,110 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   }
 
   Serial.print("Target Speed: ");
-  Serial.print(targetSpeed);
-  Serial.print(" deg/s, Target Acceleration: ");
-  Serial.print(targetAcceleration);
-  Serial.println(" deg/s²");
+  Serial.println(targetSpeed);
+  Serial.print("Target Acceleration: ");
+  Serial.println(targetAcceleration);
 
   // 使用PID计算修正值
   modifiedSpeed = pidSpeed.compute(targetSpeed, currentSpeed);
   modifiedAcceleration = pidAcceleration.compute(targetAcceleration, currentAcceleration);
 
-  Serial.print("Acceleration: ");
-  Serial.print(ax);
-  Serial.print(", ");
-  Serial.print(ay);
-  Serial.print(", ");
-  Serial.println(az);
 }
 
 void processControl() {
-
   if (useTrapezoidalProfile) {
-    node.writeSingleRegister(0x2109, 1);
-    delay(50);
-    node.writeSingleRegister(0x2310, 0);
-    delay(50);
-    node.writeSingleRegister(0x2311, 0);
-    delay(50);
-    node.writeSingleRegister(0x2314, 4);
-    delay(50);
-    node.writeSingleRegister(0x2315, 1);
-    delay(50);
+    //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
+    // node.writeSingleRegister(0x2109, 1);
+    // delay(50);
+    // node.writeSingleRegister(0x2310, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2311, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2314, 4);
+    // delay(50);
+    // node.writeSingleRegister(0x2315, 1);
+    // delay(50);
 
-    int32_t displacement = 60;  // 第1段位移
-    node.setTransmitBuffer(1, lowWord(displacement));
-    node.setTransmitBuffer(0, highWord(displacement));
-    node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
-    delay(50);
-    node.clearTransmitBuffer();
-    node.writeSingleRegister(0x2321, 20);  //第1段目标速度
-    delay(50);
-    node.writeSingleRegister(0x2322, 10);  //第1段加速度
-    delay(50);
-    node.writeSingleRegister(0x2323, 0);  //第1段减速度
-    delay(50);
-    node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
-    delay(50);
+    // int32_t displacement = 60;  // 第1段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x2321, 20);  //第1段目标速度
+    // delay(50);
+    // node.writeSingleRegister(0x2322, 10);  //第1段加速度
+    // delay(50);
+    // node.writeSingleRegister(0x2323, 0);  //第1段减速度
+    // delay(50);
+    // node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
+    // delay(50);
 
-    displacement = 390;  // 第2段位移
-    node.setTransmitBuffer(1, lowWord(displacement));
-    node.setTransmitBuffer(0, highWord(displacement));
-    node.writeMultipleRegisters(0x2325, 2);
-    delay(50);
-    node.clearTransmitBuffer();
-    node.writeSingleRegister(0x2326, 20);
-    delay(50);
-    node.writeSingleRegister(0x2327, 0);
-    delay(50);
-    node.writeSingleRegister(0x2328, 0);
-    delay(50);
-    node.writeSingleRegister(0x2329, 0);
-    delay(50);
+    // displacement = 390;  // 第2段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x2325, 2);
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x2326, 20);
+    // delay(50);
+    // node.writeSingleRegister(0x2327, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2328, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2329, 0);
+    // delay(50);
 
-    displacement = 50;  // 第3段位移
-    node.setTransmitBuffer(1, lowWord(displacement));
-    node.setTransmitBuffer(0, highWord(displacement));
-    node.writeMultipleRegisters(0x232A, 2);
-    delay(50);
-    node.clearTransmitBuffer();
-    node.writeSingleRegister(0x232B, 1);
-    delay(50);
-    node.writeSingleRegister(0x232C, 0);
-    delay(50);
-    node.writeSingleRegister(0x232D, 10);
-    delay(50);
-    node.writeSingleRegister(0x232E, 0);
-    delay(50);
+    // displacement = 50;  // 第3段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x232A, 2);
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x232B, 1);
+    // delay(50);
+    // node.writeSingleRegister(0x232C, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x232D, 10);
+    // delay(50);
+    // node.writeSingleRegister(0x232E, 0);
+    // delay(50);
 
-    displacement = 0;  // 第4段位移
-    node.setTransmitBuffer(1, lowWord(displacement));
-    node.setTransmitBuffer(0, highWord(displacement));
-    node.writeMultipleRegisters(0x232F, 2);
-    delay(50);
-    node.clearTransmitBuffer();
-    node.writeSingleRegister(0x2330, 0);
-    delay(50);
-    node.writeSingleRegister(0x2331, 0);
-    delay(50);
-    node.writeSingleRegister(0x2332, 1);
-    delay(50);
-    node.writeSingleRegister(0x2333, 1000);
-    delay(50);
+    // displacement = 0;  // 第4段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x232F, 2);
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x2330, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2331, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2332, 1);
+    // delay(50);
+    // node.writeSingleRegister(0x2333, 1000);
+    // delay(50);
 
+    // node.writeSingleRegister(0x2300, 2);
+    // delay(50);
+    node.writeSingleRegister(0x2109, 2);
+    delay(50);
+    node.writeSingleRegister(0x2380, 1);
+    delay(50);
+    node.writeSingleRegister(0x2382, 2);
+    delay(50);
+    node.writeSingleRegister(0x2383, 1);
+    delay(50);
+    node.writeSingleRegister(0x2385, 10);
+    delay(50);
+    node.writeSingleRegister(0x2390, 20);//第一段
+    delay(50);
+    node.writeSingleRegister(0x2391, 15);
+    delay(50);
+    node.writeSingleRegister(0x2392, 0);//第二段
+    delay(50);
+    node.writeSingleRegister(0x2393, 3);
+    delay(50);
     node.writeSingleRegister(0x2300, 2);
     delay(50);
   } else {
@@ -565,12 +595,7 @@ void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
 void stopServo() {
   node.writeSingleRegister(0x2300, 1);
   delay(50);
-  node.writeSingleRegister(0x2010, 1);//复位操作
-  delay(50);
-  node.writeSingleRegister(0x200A, 1);//恢复出厂设置
-  delay(50);
-  node.writeSingleRegister(0x2101, 1);//位置清零
-  delay(50);
+
 }
 
 // 显示模块：更新 OLED 显示内容
