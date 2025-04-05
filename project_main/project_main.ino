@@ -29,6 +29,10 @@ bool start = true;
 float originAngle;
 float currentAngle;
 float sensitivity;
+// 当前速度和加速度
+float currentSpeed;                          
+float currentAcceleration;  
+
 
 const float targetPosition = 180.0;   // 目标旋转角度，单位：度
 const float positionTolerance = 0.5;  // 允许的误差范围，单位：度
@@ -50,9 +54,17 @@ void debug();
 // PID控制器类
 class PID {
 public:
-  // 构造函数，初始化PID常数
-  PID(float p, float i, float d)
-    : kp(p), ki(i), kd(d), prevError(0), integral(0) {}
+  // 默认构造函数
+  PID() : kp(0), ki(0), kd(0), prevError(0), integral(0) {}
+
+  // 初始化函数，用于在setup中设置PID参数
+  void init(float p, float i, float d) {
+    kp = p;
+    ki = i;
+    kd = d;
+    prevError = 0;
+    integral = 0;
+  }
 
   // 计算PID控制输出
   float compute(float setpoint, float input) {
@@ -74,9 +86,10 @@ private:
   float integral;   // 积分值
 };
 
-// PID控制器实例
-PID pidSpeed(1.0, 0.1, 0.05);         // 用于速度控制的PID
-PID pidAcceleration(1.0, 0.1, 0.05);  // 用于加减速控制的PID
+// 全局PID控制器实例
+PID pidSpeed;         // 用于速度控制的PID
+PID pidAcceleration;  // 用于加减速控制的PID
+
 
 class TrapezoidalProfile {
 private:
@@ -202,7 +215,7 @@ public:
   }
 };
 
-TrapezoidalProfile trapezoidal(0.3333, 1.1667, 0.3333, 20, 10, 10);
+TrapezoidalProfile trapezoidal(1/3, 7/6, 1/3, 20, 10, 10);
 SCurveProfile sCurve(2.0, 3.0, 2.0, 1.736, 16.0);
 
 // ------------------------ setup() 函数 ------------------------
@@ -235,6 +248,10 @@ void setup() {
   Serial.print("灵敏度：");
   Serial.println(sensitivity);
 
+  // PID控制器实例
+  pidSpeed.init(1, 0.0, 0.01);         // 用于速度控制的PID
+  pidAcceleration.init(1, 0.0, 0.01);  // 用于加减速控制的PID
+
   //是否测试电机  
   if (debugmode) {
     debug();
@@ -244,7 +261,8 @@ void setup() {
 // ------------------------ loop() 函数 ------------------------
 void loop() {
 
-  float modifiedSpeed, modifiedAcceleration;
+  float modifiedSpeed = 0;
+  float modifiedAcceleration = 0;
 
   if (start) {
     processControl();
@@ -267,7 +285,7 @@ void loop() {
   }
 
   processSensors(modifiedSpeed, modifiedAcceleration);
-  // regulateControl(modifiedSpeed, modifiedAcceleration);
+  regulateControl(modifiedSpeed, modifiedAcceleration);
 
   processDisplay();
   processWireless();
@@ -312,8 +330,7 @@ void initHardware() {
   // 初始化 OLED 显示屏
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("OLED failed");
-    while (1)
-      ;
+    while (1);
   }
   display.clearDisplay();
   display.display();
@@ -354,10 +371,7 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   // uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
   // uint8_t ScaleAccelRange = mpu.getFullScaleAccelRange();
   float targetSpeed, targetAcceleration;
-
-  // 当前速度和加速度
-  float currentSpeed;                          
-  float currentAcceleration;                 
+               
   uint8_t result = node.readHoldingRegisters(0x606C, 2);
   if (result == node.ku8MBSuccess) {
     uint16_t highWord = node.getResponseBuffer(0);  // 高16位
@@ -374,10 +388,6 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
     currentAcceleration = (data-currentSpeed)*10000/(60*50);  
   }
   float currentTime = (millis() - offset) / 1000.0;  // 当前时间（秒）
-  Serial.print("currentSpeed:");
-  Serial.println(currentSpeed);
-  Serial.print("currentAcceleration:");
-  Serial.println(currentAcceleration);
 
 
   if (useTrapezoidalProfile) {
@@ -385,11 +395,18 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   } else {
     sCurve.updateProfile(currentTime, targetSpeed, targetAcceleration);
   }
-
-  Serial.print("Target Speed: ");
-  Serial.println(targetSpeed);
-  Serial.print("Target Acceleration: ");
-  Serial.println(targetAcceleration);
+  if(int(currentTime*10)%5==0){
+    Serial.print("currentTime:");
+    Serial.println(currentTime);
+    Serial.print("currentSpeed:");
+    Serial.println(currentSpeed);
+    Serial.print("currentAcceleration:");
+    Serial.println(currentAcceleration);  
+    Serial.print("Target Speed: ");
+    Serial.println(targetSpeed);
+    Serial.print("Target Acceleration: ");
+    Serial.println(targetAcceleration);    
+  }  
 
   // 使用PID计算修正值
   modifiedSpeed = pidSpeed.compute(targetSpeed, currentSpeed);
@@ -477,19 +494,13 @@ void processControl() {
     delay(50);
     node.writeSingleRegister(0x2380, 1);
     delay(50);
-    node.writeSingleRegister(0x2382, 2);
-    delay(50);
-    node.writeSingleRegister(0x2383, 1);
+    node.writeSingleRegister(0x2382, 1);
     delay(50);
     node.writeSingleRegister(0x2385, 10);
     delay(50);
     node.writeSingleRegister(0x2390, 20);//第一段
     delay(50);
-    node.writeSingleRegister(0x2391, 15);
-    delay(50);
-    node.writeSingleRegister(0x2392, 0);//第二段
-    delay(50);
-    node.writeSingleRegister(0x2393, 3);
+    node.writeSingleRegister(0x2391, 17);
     delay(50);
     node.writeSingleRegister(0x2300, 2);
     delay(50);
@@ -573,23 +584,16 @@ void processControl() {
 
 // 控制模块：根据传入的修改后的速度和加速度设置Modbus寄存器
 void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
-  // 设置为速度模式（寄存器 0x2109 设置为速度模式值 2）
-  node.writeSingleRegister(0x2109, 2);
-  delay(100);
-
-  // 设置加减速速率（寄存器 0x2385），单位为 0.1 rps/s，乘以 10 转换
-  node.writeSingleRegister(0x2385, modifiedAcceleration * 10);
-  delay(100);
-
-  // 设置目标速度（寄存器 0x2390）
+  modifiedAcceleration+=currentAcceleration;
+  modifiedSpeed+=currentSpeed;
+  node.writeSingleRegister(0x2385, modifiedAcceleration);
   node.writeSingleRegister(0x2390, modifiedSpeed);
-  delay(100);
 
   // 打印输出
-  Serial.print("Modified Speed: ");
-  Serial.println(modifiedSpeed);
-  Serial.print("Modified Acceleration: ");
-  Serial.println(modifiedAcceleration);
+  // Serial.print("Modified Speed: ");
+  // Serial.println(modifiedSpeed);
+  // Serial.print("Modified Acceleration: ");
+  // Serial.println(modifiedAcceleration);
 }
 
 void stopServo() {
@@ -613,7 +617,7 @@ void processDisplay() {
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
   display.print("Angle X: ");
-  display.println(AccXangle);
+  display.println(currentSpeed);
 
   // 显示蓝牙连接状态
   display.setCursor(0, 56);
