@@ -10,7 +10,7 @@
 // OLED 屏幕参数
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define OLED_RESET -1
+#define OLED_RESET    -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // RS485 通信波特率
 #define RS485_BAUD 115200
@@ -238,6 +238,22 @@ SCurveProfile sCurve(1/3, 0, 1/3, 10, 5/6);
 // ------------------------ setup() 函数 ------------------------
 void setup() {
   initHardware();
+  node.begin(1, Serial2);
+  Serial.println("Modbus RTU initialization complete.");
+
+    // Set the servo motor to position mode (address 2109h)
+  node.writeSingleRegister(0x2109, 1);  // Set to position mode
+  delay(100); // Delay for the mode to apply
+  node.writeSingleRegister(0x2320, 10000); // Set target position to 10000 pulses
+  delay(100);
+  node.writeSingleRegister(0x2321, 500);  // Set target speed to 500 rpm
+  delay(100);
+  node.writeSingleRegister(0x2322, 10);   // Set acceleration to 10 rps/s
+  delay(100);
+  node.writeSingleRegister(0x2323, 10);   // Set deceleration to 10 rps/s
+  delay(100);
+  node.writeSingleRegister(0x2300, 2);    // Set trigger to ON
+  delay(100);
 
   uint8_t result = node.readHoldingRegisters(0x2035, 2);
   if (result == node.ku8MBSuccess) {
@@ -338,6 +354,7 @@ void loop() {
 void initHardware() {
   // 初始化串口调试
   Serial.begin(115200);
+  
   // 初始化 I2C 总线（用于 OLED 和 MPU6050）
   Wire.begin();
   // 初始化 OLED 显示屏
@@ -589,35 +606,60 @@ void processDisplay() {
   display.display();
 }
 
+  
 // 无线通信模块
 void processWireless() {
-  //Serial.println("无线通信任务处理中...");
+  Serial.println("无线通信任务处理中...");
+  static unsigned long lastSendTime = 0;
+  const unsigned long sendInterval = 500;
+
+  // 检查连接状态变化
   bool currentConnected = SerialBT.hasClient();
   if (currentConnected != btConnected) {
     btConnected = currentConnected;
     Serial.println(btConnected ? "蓝牙已连接" : "蓝牙已断开");
   }
 
-  if (SerialBT.available()) {
+  // 处理所有收到的命令和数据请求
+  while(SerialBT.available()) {
     String command = SerialBT.readStringUntil('\n');
     command.trim();
     Serial.print("==========> 蓝牙消息：");
     Serial.println(command);
-    handleCommand(command);
+    handleCommand(command); 
   }
+
 }
 
-// 消费蓝牙消息（使用 if/else 处理 String 命令）
+  
+/**
+ * 消费蓝牙消息
+ */
 void handleCommand(String cmd) {
-  if (cmd.equals("ROTATE")) {
+  if(cmd == "ROTATE") {
     // TODO：实现电机旋转180度
+  } else if(cmd == "GET_DATA") {
+      int16_t ax, ay, az;
+      mpu.getAcceleration(&ax, &ay, &az);
+      float AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
+
+      // 发送数据，格式与Node.js解析逻辑匹配
+      String dataStr = "DATA:" + String(AccXangle) + "," + 
+                      String(ax) + "," + 
+                      String(ay) + "," + 
+                      String(az) + "," + 
+                      String(servoPosition) + "\n";
+      
+      SerialBT.print(dataStr);
+      Serial.println("Sent sensor data: " + dataStr);
   } else {
     Serial.print("==========> 蓝牙命令不存在：");
     Serial.println(cmd);
   }
+
 }
 
-
+  
 //----------测试部分------------
 void debug() {
   // 发送调试命令给伺服电机
@@ -652,6 +694,7 @@ void sendServoCommand() {
   }
 }
 
+  
 /**
  * 读取伺服电机响应数据并输出到串口监视器
  */
