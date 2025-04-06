@@ -96,12 +96,13 @@ private:
   float t_acc;     // 加速阶段时间（秒）
   float t_const;   // 匀速阶段时间（秒）
   float t_dec;     // 减速阶段时间（秒）
-  float maxSpeed;  // 最大速度（°/s）
-  float a;         // 加速度（°/s²）
-  float d;         // 减速度（°/s²）
+  float maxSpeed;  // 最大速度（rpm）
+  float a;         // 加速度（单位：0.1 rps/s）
+  float d;         // 减速度（单位：0.1 rps/s）
 
 public:
-  // 构造函数，固定基本参数
+  // 构造函数：参数说明——
+  // t_acc, t_const, t_dec：时间（秒）；maxSpeed 单位 rpm；a 和 d 单位为 0.1 rps/s
   TrapezoidalProfile(float t_acc, float t_const, float t_dec, float maxSpeed, float a, float d) {
     this->t_acc = t_acc;
     this->t_const = t_const;
@@ -111,12 +112,17 @@ public:
     this->d = d;
   }
 
-  // 根据当前时间 t 计算目标速度和加速度
+  // 根据当前时间 t（秒）计算目标速度（rpm）和目标加速度（0.1 rps/s）
   void updateProfile(float t, float &targetSpeed, float &targetAcceleration) {
+    // 将 a 和 d 从 0.1 rps/s 单位转换为 rpm/s：乘以 6（因为 0.1 rps = 6 rpm）
+    float accel_rpm_per_s_a = a * 6;  
+    float accel_rpm_per_s_d = d * 6;  
+
     if (t < t_acc) {
-      // 加速阶段：线性加速
+      // 加速阶段：保持目标加速度为 a (0.1 rps/s)
       targetAcceleration = a;
-      targetSpeed = a * 0.1 * 60 * t;
+      // 目标速度 = (加速度换算成 rpm/s) × t
+      targetSpeed = accel_rpm_per_s_a * t;
     } else if (t < t_acc + t_const) {
       // 匀速阶段
       targetAcceleration = 0;
@@ -125,98 +131,109 @@ public:
       // 减速阶段：线性减速
       float t_dec_phase = t - t_acc - t_const;
       targetAcceleration = -d;
-      targetSpeed = maxSpeed - d * 0.1 * 60 * t_dec_phase;
-    } else {
-      // 运动结束，速度和加速度归零
-      targetAcceleration = 0;
-      targetSpeed = 0;
-    }
-  }
-};
-
-class SCurveProfile {
-private:
-  float t_r;       // 上升斜坡阶段时间（秒）
-  float t_const;   // 恒定加速度阶段时间（秒）
-  float t_r_down;  // 下降斜坡阶段时间（秒）
-  float A_max;     // 最大加速度（°/s²）
-  float t_cv;      // 匀速阶段持续时间（秒）
-  float T_acc;     // 加速阶段总时间 = t_r + t_const + t_r_down
-  float V_max;     // 最大速度（加速阶段结束时），计算公式：0.5*A_max*t_r + A_max*t_const + 0.5*A_max*t_r_down
-
-  // 辅助函数：计算加速阶段（0 ≤ t ≤ T_acc）的目标速度和加速度
-  void accelerationPhase(float t, float &speed, float &acceleration) {
-    if (t < t_r) {
-      // 上升斜坡阶段：加速度从 0 线性增加到 A_max
-      acceleration = A_max * (t / t_r);
-      speed = 0.5 * A_max * (t * t / t_r);
-    } else if (t < t_r + t_const) {
-      // 恒定加速度阶段：加速度恒定为 A_max
-      acceleration = A_max;
-      float speed_ramp = 0.5 * A_max * t_r;  // 上升阶段累计速度
-      float t_const_phase = t - t_r;
-      speed = speed_ramp + A_max * t_const_phase;
-    } else if (t < T_acc) {
-      // 下降斜坡阶段：加速度从 A_max 线性下降到 0
-      float t_down = t - t_r - t_const;
-      acceleration = A_max * (1 - t_down / t_r_down);
-      float speed_ramp = 0.5 * A_max * t_r;
-      float speed_const = A_max * t_const;
-      float speed_ramp_down = A_max * t_down - 0.5 * A_max * (t_down * t_down / t_r_down);
-      speed = speed_ramp + speed_const + speed_ramp_down;
-    } else {
-      acceleration = 0;
-      speed = V_max;
-    }
-  }
-
-public:
-  // 构造函数：固定基本参数
-  // t_r, t_const, t_r_down 为加速阶段参数，A_max 为最大加速度，
-  // t_cv 为匀速阶段时间。减速阶段与加速阶段对称。
-  SCurveProfile(float t_r, float t_const, float t_r_down, float A_max, float t_cv) {
-    this->t_r = t_r;
-    this->t_const = t_const;
-    this->t_r_down = t_r_down;
-    this->A_max = A_max;
-    this->t_cv = t_cv;
-    T_acc = t_r + t_const + t_r_down;
-    V_max = 0.5 * A_max * t_r + A_max * t_const + 0.5 * A_max * t_r_down;
-  }
-
-  // 根据当前时间 t（单位：秒）计算整个 S 曲线运动的目标速度和加速度
-  // 整个运动分为：加速阶段（0 ≤ t < T_acc）、匀速阶段（T_acc ≤ t < T_acc + t_cv）、
-  // 以及减速阶段（T_acc + t_cv ≤ t < 2*T_acc + t_cv）。
-  void updateProfile(float t, float &targetSpeed, float &targetAcceleration) {
-    float T_total = 2 * T_acc + t_cv;
-    if (t < 0) {
-      targetSpeed = 0;
-      targetAcceleration = 0;
-    } else if (t < T_acc) {
-      // 加速阶段
-      accelerationPhase(t, targetSpeed, targetAcceleration);
-    } else if (t < T_acc + t_cv) {
-      // 匀速阶段
-      targetSpeed = V_max;
-      targetAcceleration = 0;
-    } else if (t < T_total) {
-      // 减速阶段：对称于加速阶段
-      float t_dec = t - (T_acc + t_cv);  // 当前减速阶段时间
-      float t_mirror = T_acc - t_dec;    // 对称于加速阶段
-      float speed_mirror, accel_mirror;
-      accelerationPhase(t_mirror, speed_mirror, accel_mirror);
-      targetSpeed = V_max - speed_mirror;
-      targetAcceleration = -accel_mirror;
+      // 目标速度 = 最大速度 - (减速度换算成 rpm/s × t_dec_phase)
+      targetSpeed = maxSpeed - accel_rpm_per_s_d * t_dec_phase;
     } else {
       // 运动结束
-      targetSpeed = 0;
       targetAcceleration = 0;
+      targetSpeed = 0;
     }
   }
 };
 
+
+class SCurveProfile {
+  private:
+    float t_r;       // 上升斜坡阶段时间（秒）
+    float t_const;   // 恒定加速度阶段时间（秒）
+    float t_r_down;  // 下降斜坡阶段时间（秒）
+    float A_max;     // 最大加速度，单位为 0.1 rps/s
+    float t_cv;      // 匀速阶段持续时间（秒）
+    float T_acc;     // 加速阶段总时间 = t_r + t_const + t_r_down
+    float V_max;     // 最大速度，单位 rpm
+
+    // 辅助函数：计算加速阶段（0 ≤ t ≤ T_acc）的目标速度和加速度
+    // 计算结果：speed 的单位为 0.1 rps，acceleration 单位为 0.1 rps/s
+    void accelerationPhase(float t, float &speed, float &acceleration) {
+      if (t < t_r) {
+        // 上升斜坡阶段：加速度从 0 线性增加到 A_max
+        acceleration = A_max * (t / t_r);
+        speed = 0.5 * A_max * (t * t / t_r);
+      } else if (t < t_r + t_const) {
+        // 恒定加速度阶段：加速度恒定为 A_max
+        acceleration = A_max;
+        float speed_ramp = 0.5 * A_max * t_r;  // 上升阶段累计速度
+        float t_const_phase = t - t_r;
+        speed = speed_ramp + A_max * t_const_phase;
+      } else if (t < T_acc) {
+        // 下降斜坡阶段：加速度从 A_max 线性下降到 0
+        float t_down = t - t_r - t_const;
+        acceleration = A_max * (1 - t_down / t_r_down);
+        float speed_ramp = 0.5 * A_max * t_r;
+        float speed_const = A_max * t_const;
+        float speed_ramp_down = A_max * t_down - 0.5 * A_max * (t_down * t_down / t_r_down);
+        speed = speed_ramp + speed_const + speed_ramp_down;
+      } else {
+        acceleration = 0;
+        // 若 t 超出加速阶段，直接返回最大速度（单位：0.1 rps）
+        speed = V_max / 6.0;  // V_max 已经转换为 rpm，此处换回0.1 rps单位
+      }
+      // 最后将 speed 转换为 rpm：
+      // 1 (0.1 rps) = 6 rpm，所以
+      speed = speed * 6;
+    }
+
+  public:
+    // 构造函数
+    // 参数 t_r, t_const, t_r_down 单位秒；A_max 单位为 0.1 rps/s；t_cv 单位秒
+    SCurveProfile(float t_r, float t_const, float t_r_down, float A_max, float t_cv) {
+      this->t_r = t_r;
+      this->t_const = t_const;
+      this->t_r_down = t_r_down;
+      this->A_max = A_max;
+      this->t_cv = t_cv;
+      T_acc = t_r + t_const + t_r_down;
+      // 计算最大速度，原公式得到单位为 0.1 rps，再转换为 rpm（乘以 6）
+      float V_max_0_1 = 0.5 * A_max * t_r + A_max * t_const + 0.5 * A_max * t_r_down;
+      V_max = V_max_0_1 * 6;
+    }
+
+    // 根据当前时间 t（秒）计算整个 S 曲线运动的目标速度和加速度
+    // 返回的 targetSpeed 单位为 rpm，targetAcceleration 单位为 0.1 rps/s
+    void updateProfile(float t, float &targetSpeed, float &targetAcceleration) {
+      float T_total = 2 * T_acc + t_cv;
+      if (t < 0) {
+        targetSpeed = 0;
+        targetAcceleration = 0;
+      } else if (t < T_acc) {
+        // 加速阶段
+        float speed0, accel;
+        accelerationPhase(t, speed0, accel);
+        targetSpeed = speed0;      // 单位 rpm
+        targetAcceleration = accel; // 单位 0.1 rps/s
+      } else if (t < T_acc + t_cv) {
+        // 匀速阶段
+        targetSpeed = V_max;
+        targetAcceleration = 0;
+      } else if (t < T_total) {
+        // 减速阶段：对称于加速阶段
+        float t_dec = t - (T_acc + t_cv);  // 当前减速阶段时间
+        float t_mirror = T_acc - t_dec;    // 对称于加速阶段
+        float speed_mirror, accel_mirror;
+        accelerationPhase(t_mirror, speed_mirror, accel_mirror);
+        targetSpeed = V_max - speed_mirror;
+        targetAcceleration = -accel_mirror;
+      } else {
+        // 运动结束
+        targetSpeed = 0;
+        targetAcceleration = 0;
+      }
+    }
+};
+
+
 TrapezoidalProfile trapezoidal(1/3, 7/6, 1/3, 20, 10, 10);
-SCurveProfile sCurve(2.0, 3.0, 2.0, 1.736, 16.0);
+SCurveProfile sCurve(1/3, 0, 1/3, 10, 5/6);
 
 // ------------------------ setup() 函数 ------------------------
 void setup() {
@@ -306,11 +323,7 @@ void loop() {
     stopServo();
     Serial.print("当前角度：");
     Serial.println(currentAngle);
-    delay(10000);
-    node.writeSingleRegister(0x2301, 1); 
-    delay(50);
-    node.writeSingleRegister(0x2300, 2);
-    delay(50);
+    delay(5000);
 
     //可以写一些后续的其他操作……
   }
@@ -505,78 +518,18 @@ void processControl() {
     node.writeSingleRegister(0x2300, 2);
     delay(50);
   } else {
-    //UNDO：修改为s曲线模式
-    node.writeSingleRegister(0x2109, 1);
+    node.writeSingleRegister(0x2109, 2);
     delay(50);
-    node.writeSingleRegister(0x2310, 0);
+    node.writeSingleRegister(0x2380, 1);
     delay(50);
-    node.writeSingleRegister(0x2311, 0);
+    node.writeSingleRegister(0x2382, 1);
     delay(50);
-    node.writeSingleRegister(0x2314, 4);
+    node.writeSingleRegister(0x2385, 10);
     delay(50);
-    node.writeSingleRegister(0x2315, 1);
+    node.writeSingleRegister(0x2390, 20);//第一段
     delay(50);
-
-    int32_t displacement = 60;  // 第1段位移
-    node.setTransmitBuffer(1, lowWord(displacement));
-    node.setTransmitBuffer(0, highWord(displacement));
-    node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+    node.writeSingleRegister(0x2391, 17);
     delay(50);
-    node.clearTransmitBuffer();
-    node.writeSingleRegister(0x2321, 20);  //第1段目标速度
-    delay(50);
-    node.writeSingleRegister(0x2322, 10);  //第1段加速度
-    delay(50);
-    node.writeSingleRegister(0x2323, 0);  //第1段减速度
-    delay(50);
-    node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
-    delay(50);
-
-    displacement = 390;  // 第2段位移
-    node.setTransmitBuffer(1, lowWord(displacement));
-    node.setTransmitBuffer(0, highWord(displacement));
-    node.writeMultipleRegisters(0x2325, 2);
-    delay(50);
-    node.clearTransmitBuffer();
-    node.writeSingleRegister(0x2326, 20);
-    delay(50);
-    node.writeSingleRegister(0x2327, 0);
-    delay(50);
-    node.writeSingleRegister(0x2328, 0);
-    delay(50);
-    node.writeSingleRegister(0x2329, 0);
-    delay(50);
-
-    displacement = 60;  // 第3段位移
-    node.setTransmitBuffer(1, lowWord(displacement));
-    node.setTransmitBuffer(0, highWord(displacement));
-    node.writeMultipleRegisters(0x232A, 2);
-    delay(50);
-    node.clearTransmitBuffer();
-    node.writeSingleRegister(0x232B, 1);
-    delay(50);
-    node.writeSingleRegister(0x232C, 0);
-    delay(50);
-    node.writeSingleRegister(0x232D, 10);
-    delay(50);
-    node.writeSingleRegister(0x232E, 0);
-    delay(50);
-
-    displacement = 0;  // 第4段位移
-    node.setTransmitBuffer(1, lowWord(displacement));
-    node.setTransmitBuffer(0, highWord(displacement));
-    node.writeMultipleRegisters(0x232F, 2);
-    delay(50);
-    node.clearTransmitBuffer();
-    node.writeSingleRegister(0x2330, 0);
-    delay(50);
-    node.writeSingleRegister(0x2331, 0);
-    delay(50);
-    node.writeSingleRegister(0x2332, 1);
-    delay(50);
-    node.writeSingleRegister(0x2333, 1000);
-    delay(50);
-
     node.writeSingleRegister(0x2300, 2);
     delay(50);
   }
