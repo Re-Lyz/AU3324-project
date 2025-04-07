@@ -315,6 +315,7 @@ void loop() {
     }
     Serial.print("初始角度：");
     Serial.println(originAngle);
+
   }
 
   processSensors(modifiedSpeed, modifiedAcceleration);
@@ -332,6 +333,7 @@ void loop() {
     int32_t data = ((int32_t)highWord << 16) | lowWord;
     currentAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
   }
+
 
   if (targetPosition < currentAngle - originAngle - positionTolerance) {
     start = true;
@@ -570,7 +572,114 @@ void stopServo() {
   node.writeSingleRegister(0x2300, 1);
   delay(50);
 
+void processControl() {
+  if (useTrapezoidalProfile) {
+    //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
+    // node.writeSingleRegister(0x2109, 1);
+    // delay(50);
+    // node.writeSingleRegister(0x2310, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2311, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2314, 4);
+    // delay(50);
+    // node.writeSingleRegister(0x2315, 1);
+    // delay(50);
+
+    // int32_t displacement = 60;  // 第1段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x2321, 20);  //第1段目标速度
+    // delay(50);
+    // node.writeSingleRegister(0x2322, 10);  //第1段加速度
+    // delay(50);
+    // node.writeSingleRegister(0x2323, 0);  //第1段减速度
+    // delay(50);
+    // node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
+    // delay(50);
+
+    // displacement = 390;  // 第2段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x2325, 2);
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x2326, 20);
+    // delay(50);
+    // node.writeSingleRegister(0x2327, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2328, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2329, 0);
+    // delay(50);
+
+    // displacement = 50;  // 第3段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x232A, 2);
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x232B, 1);
+    // delay(50);
+    // node.writeSingleRegister(0x232C, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x232D, 10);
+    // delay(50);
+    // node.writeSingleRegister(0x232E, 0);
+    // delay(50);
+
+    // displacement = 0;  // 第4段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x232F, 2);
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x2330, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2331, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2332, 1);
+    // delay(50);
+    // node.writeSingleRegister(0x2333, 1000);
+    // delay(50);
+
+    // node.writeSingleRegister(0x2300, 2);
+    // delay(50);
+    node.writeSingleRegister(0x2109, 2);
+    delay(50);
+    node.writeSingleRegister(0x2380, 1);
+    delay(50);
+    node.writeSingleRegister(0x2382, 1);
+    delay(50);
+    node.writeSingleRegister(0x2385, 10);
+    delay(50);
+    node.writeSingleRegister(0x2390, 20);//第一段
+    delay(50);
+    node.writeSingleRegister(0x2391, 17);
+    delay(50);
+    node.writeSingleRegister(0x2300, 2);
+    delay(50);
+  } else {
+    node.writeSingleRegister(0x2109, 2);
+    delay(50);
+    node.writeSingleRegister(0x2380, 1);
+    delay(50);
+    node.writeSingleRegister(0x2382, 1);
+    delay(50);
+    node.writeSingleRegister(0x2385, 10);
+    delay(50);
+    node.writeSingleRegister(0x2390, 20);//第一段
+    delay(50);
+    node.writeSingleRegister(0x2391, 17);
+    delay(50);
+    node.writeSingleRegister(0x2300, 2);
+    delay(50);
+  }
 }
+
 
 // 显示模块：更新 OLED 显示屏内容
 void processDisplay() {
@@ -644,6 +753,7 @@ void processDisplay() {
   // 更新显示
   display.display();
   prevSpeed = currentSpeed;
+
 }
 
   
