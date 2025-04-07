@@ -5,6 +5,9 @@
 #include <ModbusMaster.h>
 #include <BluetoothSerial.h>
 #include <math.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <WiFiAP.h>
 
 // ------------------------ 全局变量与常量 ------------------------
 // OLED 屏幕参数
@@ -15,11 +18,17 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // RS485 通信波特率
 #define RS485_BAUD 115200
 
+#define SSID "ESP32_AP"
+#define PASSWORD "12345678"
+
 #define ONE_ROLL 1000
 
 MPU6050 mpu;
 ModbusMaster node;
 BluetoothSerial SerialBT;  // 声明蓝牙串口实例
+
+WiFiServer wifiServer(8080);  
+WiFiClient wifiClient; 
 
 // 定义其他全局变量（例如伺服电机参数等）
 bool btConnected = false;  // 蓝牙连接状态标志
@@ -32,7 +41,7 @@ float sensitivity;
 // 当前速度和加速度
 float currentSpeed;                          
 float currentAcceleration;  
-
+uint16_t servoPosition = 0;  // 舵机位置
 
 const float targetPosition = 180.0;   // 目标旋转角度，单位：度
 const float positionTolerance = 0.5;  // 允许的误差范围，单位：度
@@ -346,9 +355,6 @@ void loop() {
 }
 
 
-
-
-
 // ------------------------ 模块函数实现 ------------------------
 // 硬件初始化模块
 void initHardware() {
@@ -390,8 +396,16 @@ void initHardware() {
     Serial.println("蓝牙初始化失败!");
   } else {
     Serial.println("蓝牙已就绪，名称: ESP32_Servo");
-    SerialBT.setPin("1234", 4);  // 设置配对密码
+    // SerialBT.setPin("1234", 4);  // 设置配对密码
   }
+
+  // Wifi初始化
+  WiFi.softAP(SSID, PASSWORD);
+  Serial.println("热点已启动");
+  Serial.print("SSID: ");
+  Serial.println(SSID);
+  Serial.print("IP地址: ");
+  Serial.println(WiFi.softAPIP());  // 默认IP通常是192.168.4.1
 }  // end of initHardware
 
 // 传感器模块：读取速度并计算PID调整值
@@ -605,58 +619,92 @@ void processDisplay() {
 
   display.display();
 }
-
   
 // 无线通信模块
 void processWireless() {
-  Serial.println("无线通信任务处理中...");
-  static unsigned long lastSendTime = 0;
-  const unsigned long sendInterval = 500;
-
-  // 检查连接状态变化
-  bool currentConnected = SerialBT.hasClient();
-  if (currentConnected != btConnected) {
-    btConnected = currentConnected;
+  // 处理蓝牙通信
+  bool currentBtConnected = SerialBT.hasClient();
+  if (currentBtConnected != btConnected) {
+    btConnected = currentBtConnected;
     Serial.println(btConnected ? "蓝牙已连接" : "蓝牙已断开");
   }
 
-  // 处理所有收到的命令和数据请求
+  // 处理蓝牙数据
   while(SerialBT.available()) {
     String command = SerialBT.readStringUntil('\n');
     command.trim();
-    Serial.print("==========> 蓝牙消息：");
+    Serial.print("蓝牙消息：");
     Serial.println(command);
     handleCommand(command); 
   }
 
-}
-
-  
-/**
- * 消费蓝牙消息
- */
-void handleCommand(String cmd) {
-  if(cmd == "ROTATE") {
-    // TODO：实现电机旋转180度
-  } else if(cmd == "GET_DATA") {
-      int16_t ax, ay, az;
-      mpu.getAcceleration(&ax, &ay, &az);
-      float AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
-
-      // 发送数据，格式与Node.js解析逻辑匹配
-      String dataStr = "DATA:" + String(AccXangle) + "," + 
-                      String(ax) + "," + 
-                      String(ay) + "," + 
-                      String(az) + "," + 
-                      String(servoPosition) + "\n";
-      
-      SerialBT.print(dataStr);
-      Serial.println("Sent sensor data: " + dataStr);
-  } else {
-    Serial.print("==========> 蓝牙命令不存在：");
-    Serial.println(cmd);
+  // 处理WiFi连接
+  if (!wifiClient || !wifiClient.connected()) {
+    wifiClient = wifiServer.available();
   }
 
+  // 处理WiFi数据
+  if (wifiClient && wifiClient.connected()) {
+    while(wifiClient.available()) {
+      String command = wifiClient.readStringUntil('\n');
+      command.trim();
+      Serial.print("WiFi消息：");
+      Serial.println(command);
+      handleCommand(command);
+    }
+  }
+}
+  
+// 处理服务端命令
+void handleCommand(String cmd) {
+  if(cmd == "ROTATE") {
+    // 旋转180度逻辑
+    start = true;
+    offset = millis();
+  } else if(cmd == "GET_DATA") {
+    sendSensorData();
+  } else {
+    Serial.print("未知命令：");
+    Serial.println(cmd);
+    
+    // 可以发送错误响应
+    String response = "ERROR: Unknown command\n";
+    if (btConnected) SerialBT.print(response);
+    if (wifiClient && wifiClient.connected()) wifiClient.print(response);
+  }
+}
+
+// 发送传感器数据
+void sendSensorData() {
+  int16_t ax, ay, az;
+  mpu.getAcceleration(&ax, &ay, &az);
+  float AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
+
+  // 读取舵机位置
+  uint8_t result = node.readHoldingRegisters(0x6064, 2); // 假设0x6064是位置寄存器
+  if (result == node.ku8MBSuccess) {
+    uint16_t highWord = node.getResponseBuffer(0);
+    uint16_t lowWord = node.getResponseBuffer(1);
+    servoPosition = ((uint32_t)highWord << 16) | lowWord;
+  }
+
+  String dataStr = "DATA:" + String(AccXangle) + "," + 
+                  String(ax) + "," + 
+                  String(ay) + "," + 
+                  String(az) + "," + 
+                  String(servoPosition) + "\n";
+
+  // 通过蓝牙发送
+  if (btConnected) {
+    SerialBT.print(dataStr);
+  }
+  
+  // 通过WiFi发送
+  if (wifiClient && wifiClient.connected()) {
+    wifiClient.print(dataStr);
+  }
+  
+  Serial.println("发送传感器数据: " + dataStr);
 }
 
   
