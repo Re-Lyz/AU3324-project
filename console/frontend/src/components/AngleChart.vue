@@ -1,6 +1,13 @@
 <template>
   <div class="angle-chart-container">
-    <v-chart class="chart" :option="chartOption" autoresize />
+    <div class="chart-group">
+      <div class="chart-wrapper">
+        <v-chart class="chart" :option="speedChartOption" autoresize />
+      </div>
+      <div class="chart-wrapper">
+        <v-chart class="chart" :option="accelerationChartOption" autoresize />
+      </div>
+    </div>
   </div>
 </template>
 
@@ -34,14 +41,15 @@ export default {
   },
   
   setup(props) {
-    const chartOption = ref({
+    // Speed Chart Configuration
+    const speedChartOption = ref({
       title: {
-        text: '实时角度监控',
+        text: '实时速度监控',
         left: 'center'
       },
       tooltip: {
         trigger: 'axis',
-        formatter: '{b}<br/>角度: {c}°'
+        formatter: '{b}<br/>速度: {c}°'
       },
       xAxis: {
         type: 'category',
@@ -52,7 +60,7 @@ export default {
       },
       yAxis: {
         type: 'value',
-        name: '角度 (°)',
+        name: '速度',
         min: -30,
         max: 30,
         axisLine: {
@@ -68,7 +76,7 @@ export default {
       },
       series: [
         {
-          name: '角度',
+          name: '速度',
           type: 'line',
           smooth: true,
           data: [],
@@ -96,22 +104,93 @@ export default {
       animationDuration: 300
     });
 
-    const updateChart = (angle) => {
+    // Acceleration Chart Configuration
+    const accelerationChartOption = ref({
+      title: {
+        text: '实时加速度监控',
+        left: 'center'
+      },
+      tooltip: {
+        trigger: 'axis',
+        formatter: '{b}<br/>加速度: {c} m/s²'
+      },
+      xAxis: {
+        type: 'category',
+        data: [],
+        axisLabel: {
+          show: false
+        }
+      },
+      yAxis: {
+        type: 'value',
+        name: '加速度',
+        min: -5,
+        max: 5,
+        axisLine: {
+          lineStyle: {
+            color: '#999'
+          }
+        },
+        splitLine: {
+          lineStyle: {
+            type: 'dashed'
+          }
+        }
+      },
+      series: [
+        {
+          name: '加速度',
+          type: 'line',
+          smooth: true,
+          data: [],
+          lineStyle: {
+            width: 3,
+            color: '#91CC75'
+          },
+          itemStyle: {
+            color: '#91CC75'
+          },
+          markLine: {
+            silent: true,
+            data: [
+              {
+                yAxis: 0,
+                lineStyle: {
+                  color: '#FF5722',
+                  type: 'dashed'
+                }
+              }
+            ]
+          }
+        }
+      ],
+      animationDuration: 300
+    });
+
+    const updateChart = (speed, acceleration) => {
       const now = new Date();
       const time = `${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
       
-      // 限制数据点数量
-      if (chartOption.value.xAxis.data.length > 50) {
-        chartOption.value.xAxis.data.shift();
-        chartOption.value.series[0].data.shift();
+      // Update speed chart
+      if (speedChartOption.value.xAxis.data.length > 50) {
+        speedChartOption.value.xAxis.data.shift();
+        speedChartOption.value.series[0].data.shift();
       }
+      speedChartOption.value.xAxis.data.push(time);
+      speedChartOption.value.series[0].data.push(speed);
       
-      chartOption.value.xAxis.data.push(time);
-      chartOption.value.series[0].data.push(angle);
+      // Update acceleration chart
+      if (accelerationChartOption.value.xAxis.data.length > 50) {
+        accelerationChartOption.value.xAxis.data.shift();
+        accelerationChartOption.value.series[0].data.shift();
+      }
+      accelerationChartOption.value.xAxis.data.push(time);
+      accelerationChartOption.value.series[0].data.push(acceleration);
     };
 
     return {
-      chartOption,
+      speedChartOption,
+      accelerationChartOption,
       updateChart
     };
   }
@@ -121,8 +200,21 @@ export default {
 <style scoped>
 .angle-chart-container {
   width: 100%;
-  height: 400px;
+  height: 600px; /* Increased height to accommodate two charts */
 }
+
+.chart-group {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  height: 100%;
+}
+
+.chart-wrapper {
+  flex: 1;
+  height: 50%;
+}
+
 .chart {
   width: 100%;
   height: 100%;

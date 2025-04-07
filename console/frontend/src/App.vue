@@ -9,15 +9,9 @@
       
       <!-- 显示传感器数据 -->
       <div class="sensor-data">
-        <h3>实时传感器数据</h3>
-        <p>X轴角度: {{ sensorData.angleX.toFixed(2) }}°</p>
-        <p>加速度: 
-          X:{{ sensorData.accX }}, 
-          Y:{{ sensorData.accY }}, 
-          Z:{{ sensorData.accZ }}
-        </p>
-        <p>舵机位置: {{ sensorData.servoPosition }}°</p>
-        <p>更新时间: {{ sensorData.timestamp || '暂无数据' }}</p>
+        <h3>实时数据</h3>
+        <p>速度：{{ sensorData.speed }}</p>
+        <p>加速度：{{ sensorData.acceleration }}</p>
       </div>
     </div>
 
@@ -42,11 +36,8 @@ export default {
     const SERVER_PORT = 8081;
     let socket = null;
     let sensorData = ref({
-      angleX: 0,
-      accX: 0,
-      accY: 0,
-      accZ: 0,
-      servoPosition: 0,
+      speed: 0.0,
+      acceleration: 0.0,
       timestamp: null
     });
 
@@ -67,17 +58,14 @@ export default {
           if (type === 'sensor_data') {
             // 更新传感器数据
             sensorData.value = {
-              angleX: parseFloat(data.angleX),
-              accX: parseInt(data.accX),
-              accY: parseInt(data.accY),
-              accZ: parseInt(data.accZ),
-              servoPosition: parseInt(data.servoPosition),
+              speed: parseFloat(data.speed),
+              acceleration: parseFloat(data.acceleration),
               timestamp: data.lastUpdate
             };
             
             // 更新图表
             if (chart.value) {
-              chart.value.updateChart(sensorData.value.angleX);
+              chart.value.updateChart(sensorData.value.speed, sensorData.value.acceleration);
             }
             
           } else if (type === 'status') {

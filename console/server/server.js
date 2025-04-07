@@ -19,11 +19,8 @@ const systemState = {
   port: null,
   parser: null,
   sensorData: {
-    angleX: 0,
-    accX: 0,
-    accY: 0,
-    accZ: 0,
-    servoPosition: 0,
+    speed: 0,
+    acceleration: 0,
     lastUpdate: null
   },
   dataInterval: null
@@ -95,18 +92,16 @@ function processIncomingData(rawData) {
   console.log('Received raw data:', rawData);
   
   try {
-    // 解析数据（根据ESP32发送的实际格式调整）
-    // 预期格式: "DATA:angleX,ax,ay,az,servoPos"
     if (rawData.startsWith('DATA:')) {
       const parts = rawData.substring(5).split(':');
-      if (parts.length >= 5) {
+      if (parts.length == 2) {
         systemState.sensorData = {
           speed: parseFloat(parts[0]),
           acceleration: parseFloat(parts[1]),
           lastUpdate: new Date().toISOString()
         };
         
-        console.log("==========> Data: " + systemState.sensorData);
+        console.log("==========> Data: " + JSON.stringify(systemState.sensorData));
         // 广播给所有客户端
         broadcastToClients({
           type: 'sensor_data',
