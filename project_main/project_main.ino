@@ -356,6 +356,7 @@ void loop() {
     Serial.println(currentAngle);
     delay(5000);
 
+    clearSpeedHistory();
     //可以写一些后续的其他操作……
   }
 }
@@ -647,6 +648,14 @@ void updateSpeedHistory(float speed) {
     if(maxSpeed < 5.0f) maxSpeed = 5.0f;  // 最小刻度
 }
 
+// 清空速度历史
+void clearSpeedHistory() {
+    for(int i = 0; i < HISTORY_SIZE; i++) {
+        speedHistory[i] = 0.0f;
+    }
+    historyIndex = 0;  
+    maxSpeed = 0.0f;    
+}
   
 // 无线通信模块
 void processWireless() {
