@@ -5,6 +5,9 @@
 #include <ModbusMaster.h>
 #include <BluetoothSerial.h>
 #include <math.h>
+#include "esp_bt_main.h"
+#include "esp_bt_device.h"
+#include "esp_gap_bt_api.h"
 
 // ------------------------ 全局变量与常量 ------------------------
 // OLED 屏幕参数
@@ -17,6 +20,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 #define ONE_ROLL 1000
 #define HISTORY_SIZE 64  // 历史数据缓冲区大小
+#define RECONNECT_INTERVAL 5000
 
 MPU6050 mpu;
 ModbusMaster node;
@@ -27,6 +31,8 @@ bool btConnected = false;  // 蓝牙连接状态标志
 bool debugmode = false;
 bool useTrapezoidalProfile = true;
 bool start = true;
+bool btPreviouslyConnected = false;
+
 float originAngle;
 float currentAngle;
 float sensitivity;
@@ -35,8 +41,11 @@ float currentSpeed;
 float currentAcceleration;  
 
 float speedHistory[HISTORY_SIZE];
-int historyIndex = 0;
 float maxSpeed = 0.0f;
+
+int historyIndex = 0;
+unsigned long reconnectAttemptTime = 0;
+
 
 const float targetPosition = 180.0;   // 目标旋转角度，单位：度
 const float positionTolerance = 0.5;  // 允许的误差范围，单位：度
@@ -392,7 +401,8 @@ void initHardware() {
     Serial.println("蓝牙初始化失败!");
   } else {
     Serial.println("蓝牙已就绪，名称: ESP32_Servo");
-    // SerialBT.setPin("1234", 4);  // 设置配对密码
+    SerialBT.setPin("1234", 4);  // 设置配对密码
+    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
   }
 }  // end of initHardware
 
@@ -640,26 +650,59 @@ void updateSpeedHistory(float speed) {
   
 // 无线通信模块
 void processWireless() {
-  Serial.println("无线通信任务处理中...");
-  static unsigned long lastSendTime = 0;
-  const unsigned long sendInterval = 500;
-
   // 检查连接状态变化
   bool currentConnected = SerialBT.hasClient();
+  
+  // 连接状态改变时的处理
   if (currentConnected != btConnected) {
     btConnected = currentConnected;
     Serial.println(btConnected ? "蓝牙已连接" : "蓝牙已断开");
+    
+    // 在OLED上显示蓝牙状态
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println(btConnected ? "BT: Connected" : "BT: Disconnected");
+    
+    // 连接成功时发送欢迎消息
+    if (btConnected) {
+      SerialBT.println("CONNECTED:ESP32_Servo ready");
+      btPreviouslyConnected = true;
+    }
+  }
+  
+  // 如果之前连接过但现在断开，尝试重新广播以便Windows重新连接
+  if (btPreviouslyConnected && !btConnected) {
+    unsigned long currentTime = millis();
+    if (currentTime - reconnectAttemptTime > RECONNECT_INTERVAL) {
+      Serial.println("尝试重新广播蓝牙...");
+      // 重新设置蓝牙可见性
+      esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+      reconnectAttemptTime = currentTime;
+    }
   }
 
   // 处理所有收到的命令和数据请求
   while(SerialBT.available()) {
     String command = SerialBT.readStringUntil('\n');
     command.trim();
-    Serial.print("==========> 蓝牙消息：");
+    Serial.print("蓝牙消息：");
     Serial.println(command);
     handleCommand(command); 
   }
-
+  
+  // 如果已连接，周期性发送心跳以保持连接
+  static unsigned long lastHeartbeatTime = 0;
+  const unsigned long HEARTBEAT_INTERVAL = 2000; // 2秒
+  
+  if (btConnected) {
+    unsigned long currentTime = millis();
+    if (currentTime - lastHeartbeatTime > HEARTBEAT_INTERVAL) {
+      SerialBT.println("HEARTBEAT:" + String(currentTime/1000));
+      lastHeartbeatTime = currentTime;
+    }
+  }
 }
 
   
