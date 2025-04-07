@@ -16,6 +16,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define RS485_BAUD 115200
 
 #define ONE_ROLL 1000
+#define HISTORY_SIZE 64  // 历史数据缓冲区大小
 
 MPU6050 mpu;
 ModbusMaster node;
@@ -33,6 +34,9 @@ float sensitivity;
 float currentSpeed;                          
 float currentAcceleration;  
 
+float speedHistory[HISTORY_SIZE];
+int historyIndex = 0;
+float maxSpeed = 0.0f;
 
 const float targetPosition = 180.0;   // 目标旋转角度，单位：度
 const float positionTolerance = 0.5;  // 允许的误差范围，单位：度
@@ -347,10 +351,6 @@ void loop() {
   }
 }
 
-
-
-
-
 // ------------------------ 模块函数实现 ------------------------
 // 硬件初始化模块
 void initHardware() {
@@ -392,7 +392,7 @@ void initHardware() {
     Serial.println("蓝牙初始化失败!");
   } else {
     Serial.println("蓝牙已就绪，名称: ESP32_Servo");
-    SerialBT.setPin("1234", 4);  // 设置配对密码
+    // SerialBT.setPin("1234", 4);  // 设置配对密码
   }
 }  // end of initHardware
 
@@ -571,189 +571,70 @@ void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
 void stopServo() {
   node.writeSingleRegister(0x2300, 1);
   delay(50);
-
-void processControl() {
-  if (useTrapezoidalProfile) {
-    //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
-    // node.writeSingleRegister(0x2109, 1);
-    // delay(50);
-    // node.writeSingleRegister(0x2310, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2311, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2314, 4);
-    // delay(50);
-    // node.writeSingleRegister(0x2315, 1);
-    // delay(50);
-
-    // int32_t displacement = 60;  // 第1段位移
-    // node.setTransmitBuffer(1, lowWord(displacement));
-    // node.setTransmitBuffer(0, highWord(displacement));
-    // node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
-    // delay(50);
-    // node.clearTransmitBuffer();
-    // node.writeSingleRegister(0x2321, 20);  //第1段目标速度
-    // delay(50);
-    // node.writeSingleRegister(0x2322, 10);  //第1段加速度
-    // delay(50);
-    // node.writeSingleRegister(0x2323, 0);  //第1段减速度
-    // delay(50);
-    // node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
-    // delay(50);
-
-    // displacement = 390;  // 第2段位移
-    // node.setTransmitBuffer(1, lowWord(displacement));
-    // node.setTransmitBuffer(0, highWord(displacement));
-    // node.writeMultipleRegisters(0x2325, 2);
-    // delay(50);
-    // node.clearTransmitBuffer();
-    // node.writeSingleRegister(0x2326, 20);
-    // delay(50);
-    // node.writeSingleRegister(0x2327, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2328, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2329, 0);
-    // delay(50);
-
-    // displacement = 50;  // 第3段位移
-    // node.setTransmitBuffer(1, lowWord(displacement));
-    // node.setTransmitBuffer(0, highWord(displacement));
-    // node.writeMultipleRegisters(0x232A, 2);
-    // delay(50);
-    // node.clearTransmitBuffer();
-    // node.writeSingleRegister(0x232B, 1);
-    // delay(50);
-    // node.writeSingleRegister(0x232C, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x232D, 10);
-    // delay(50);
-    // node.writeSingleRegister(0x232E, 0);
-    // delay(50);
-
-    // displacement = 0;  // 第4段位移
-    // node.setTransmitBuffer(1, lowWord(displacement));
-    // node.setTransmitBuffer(0, highWord(displacement));
-    // node.writeMultipleRegisters(0x232F, 2);
-    // delay(50);
-    // node.clearTransmitBuffer();
-    // node.writeSingleRegister(0x2330, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2331, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2332, 1);
-    // delay(50);
-    // node.writeSingleRegister(0x2333, 1000);
-    // delay(50);
-
-    // node.writeSingleRegister(0x2300, 2);
-    // delay(50);
-    node.writeSingleRegister(0x2109, 2);
-    delay(50);
-    node.writeSingleRegister(0x2380, 1);
-    delay(50);
-    node.writeSingleRegister(0x2382, 1);
-    delay(50);
-    node.writeSingleRegister(0x2385, 10);
-    delay(50);
-    node.writeSingleRegister(0x2390, 20);//第一段
-    delay(50);
-    node.writeSingleRegister(0x2391, 17);
-    delay(50);
-    node.writeSingleRegister(0x2300, 2);
-    delay(50);
-  } else {
-    node.writeSingleRegister(0x2109, 2);
-    delay(50);
-    node.writeSingleRegister(0x2380, 1);
-    delay(50);
-    node.writeSingleRegister(0x2382, 1);
-    delay(50);
-    node.writeSingleRegister(0x2385, 10);
-    delay(50);
-    node.writeSingleRegister(0x2390, 20);//第一段
-    delay(50);
-    node.writeSingleRegister(0x2391, 17);
-    delay(50);
-    node.writeSingleRegister(0x2300, 2);
-    delay(50);
-  }
 }
 
 
 // 显示模块：更新 OLED 显示屏内容
+// 主显示函数
 void processDisplay() {
-  // 清空屏幕
-  display.clearDisplay();
+    display.clearDisplay();
+    
+    // 1. 获取传感器数据
+    int16_t ax, ay, az;
+    mpu.getAcceleration(&ax, &ay, &az);
+    float AccXangle = atan2((float)ay, sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
+    updateSpeedHistory(currentSpeed);
+    
+    // 第2行：速度
+    display.setCursor(0, 10);
+    display.printf("Speed: %5.1f°/s", currentSpeed);
 
-  int16_t ax, ay, az;
-  float AccXangle;
-  mpu.getAcceleration(&ax, &ay, &az);
+    // 3. 中间图表区 (速度曲线)
+    const int graphY = 32;       // 图表起始Y坐标
+    const int graphHeight = 28;  // 图表高度
+    const int graphWidth = display.width();
+    
+    // 绘制坐标轴
+    display.drawFastHLine(0, graphY + graphHeight/2, graphWidth, SSD1306_WHITE);
+    
+    // 自动缩放因子 (基于最大速度)
+    float scaleFactor = (graphHeight/2 - 2) / maxSpeed;
+    
+    // 绘制速度曲线
+    int prevX = 0;
+    int prevY = graphY + graphHeight/2 - (int)(speedHistory[0] * scaleFactor);
+    
+    for(int i = 1; i < HISTORY_SIZE; i++) {
+        int x = map(i, 0, HISTORY_SIZE-1, 0, graphWidth-1);
+        int y = graphY + graphHeight/2 - (int)(speedHistory[i] * scaleFactor);
+        
+        // 只连接有效数据点
+        if(i <= historyIndex || historyIndex == 0) {
+            display.drawLine(prevX, prevY, x, y, SSD1306_WHITE);
+        }
+        prevX = x;
+        prevY = y;
+    }
 
-  // 计算 X 轴角度
-  AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
+    // 5. 更新显示
+    display.display();
+    
+    // 定期重置最大速度（每10秒）
+    static unsigned long lastReset = 0;
+    if(millis() - lastReset > 10000) {
+        maxSpeed = 0.0f;
+        lastReset = millis();
+    }
+}
 
-  // 显示角度和速度信息 (顶部区域)
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  
-  // 第一行：显示角度
-  display.setCursor(0, 0);
-  display.print("Angle: ");
-  display.print(AccXangle, 1);
-  display.print("°");
-  
-  // 第二行：显示当前速度
-  display.setCursor(0, 10);
-  display.print("Speed: ");
-  display.print(currentSpeed, 1);
-  display.print("°/s");
-  
-  // 第三行：显示当前加速度
-  display.setCursor(0, 20);
-  display.print("Accel: ");
-  display.print(currentAcceleration, 1);
-  display.print("°/s²");
-
-  // 绘制速度曲线图 (中间区域)
-  const int graphHeight = 20;
-  const int graphWidth = SCREEN_WIDTH;
-  const int graphY = 30;  // Start below text area
-  
-  display.drawLine(0, graphY + graphHeight/2, graphWidth, graphY + graphHeight/2, SSD1306_WHITE); // X-axis
-  display.drawLine(0, graphY, 0, graphY + graphHeight, SSD1306_WHITE); // Y-axis
-  display.setCursor(graphWidth/2 - 20, graphY - 8);
-  display.print("Speed Curve");
-
-  static float prevSpeed = 0;
-  int prevY = graphY + graphHeight/2 - constrain(prevSpeed * 2, -graphHeight/2, graphHeight/2);
-  
-  for (int x = 1; x < graphWidth; x++) {
-    float simulatedSpeed = currentSpeed * sin(x * 0.1);
-    int y = graphY + graphHeight/2 - constrain(simulatedSpeed * 2, -graphHeight/2, graphHeight/2);
-    display.drawLine(x-1, prevY, x, y, SSD1306_WHITE);
-    prevY = y;
-  }
-
-  // 绘制指示线 (在曲线图下方)
-  int x_center = SCREEN_WIDTH / 2;
-  int y_indicator = graphY + graphHeight + 10; // Position below graph
-  int line_length = 20;
-  int angle_rad = AccXangle * PI / 180;
-  int x_end = x_center + line_length * sin(angle_rad);
-  int y_end = y_indicator - line_length * cos(angle_rad);
-
-  display.drawLine(x_center, y_indicator, x_end, y_end, SSD1306_WHITE);
-
-  // 显示蓝牙连接状态 (底部区域)
-  display.setCursor(0, SCREEN_HEIGHT - 8);
-  display.print("BT: ");
-  display.print(btConnected ? "Connected" : "Available");
-
-  // 更新显示
-  display.display();
-  prevSpeed = currentSpeed;
-
+// 更新速度历史记录
+void updateSpeedHistory(float speed) {
+    speedHistory[historyIndex] = speed;
+    historyIndex = (historyIndex + 1) % HISTORY_SIZE;
+    
+    // 更新最大速度（用于自动缩放）
+    maxSpeed = max(maxSpeed, fabs(speed));
+    if(maxSpeed < 5.0f) maxSpeed = 5.0f;  // 最小刻度
 }
 
   
@@ -792,13 +673,13 @@ void handleCommand(String cmd) {
       int16_t ax, ay, az;
       mpu.getAcceleration(&ax, &ay, &az);
       float AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
-
+      
       // 发送数据，格式与Node.js解析逻辑匹配
       String dataStr = "DATA:" + String(AccXangle) + "," + 
                       String(ax) + "," + 
                       String(ay) + "," + 
                       String(az) + "," + 
-                      String(servoPosition) + "\n";
+                      String(currentSpeed) + "\n";
       
       SerialBT.print(dataStr);
       Serial.println("Sent sensor data: " + dataStr);
