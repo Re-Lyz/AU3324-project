@@ -2,14 +2,29 @@
   <div class="app-container">
     <div class="content-left">
       <h1>云台控制台</h1>
-      <div class="status" :class="{ connected }">
-        {{ connected ? '已连接' : '未连接' }}
+      
+      <!-- 通信状态显示 -->
+      <div class="connection-status">
+        <div class="status" :class="{ connected: commStatus.isConnected }">
+          {{ commStatus.isConnected ? '已连接' : '未连接' }}
+        </div>
+        <div class="mode-info">
+          <span v-if="commStatus.isConnected">
+            当前模式: {{ commStatus.currentMode === 'bluetooth' ? '蓝牙' : 'WiFi' }}
+          </span>
+          <span v-else>正在尝试连接...</span>
+        </div>
+        <div class="available-modes">
+          <span>蓝牙: {{ commStatus.bluetoothAvailable ? '可用' : '不可用' }}</span>
+          <span>WiFi: {{ commStatus.wifiAvailable ? '可用' : '不可用' }}</span>
+        </div>
       </div>
+      
       <AngleChart ref="chart" />
       
       <!-- 显示传感器数据 -->
       <div class="sensor-data">
-        <h3>实时传感器数据</h3>
+        <h3>实时传感器数据 ({{ sensorData.source === 'bluetooth' ? '蓝牙' : 'WiFi' }})</h3>
         <p>X轴角度: {{ sensorData.angleX.toFixed(2) }}°</p>
         <p>加速度: 
           X:{{ sensorData.accX }}, 
@@ -25,6 +40,31 @@
       <div class="panel-wrapper">
         <h2>控制面板</h2>
         <button class="panel-button" @click="sendRotateRequest">旋转云台</button>
+        
+        <!-- 通信模式选择 -->
+        <div class="mode-selector">
+          <h3>优先通信模式</h3>
+          <div class="radio-group">
+            <label>
+              <input 
+                type="radio" 
+                value="bluetooth" 
+                v-model="preferredMode"
+                @change="setPreferredMode"
+              >
+              蓝牙优先
+            </label>
+            <label>
+              <input 
+                type="radio" 
+                value="wifi" 
+                v-model="preferredMode"
+                @change="setPreferredMode"
+              >
+              WiFi优先
+            </label>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -37,21 +77,38 @@ import AngleChart from './components/AngleChart.vue';
 export default {
   components: { AngleChart },
   setup() {
-    const connected = ref(false);
-    const chart = ref(null);
     const SERVER_PORT = 8081;
     let socket = null;
-    let sensorData = ref({
+    
+    // 通信状态
+    const commStatus = ref({
+      preferredMode: 'bluetooth',
+      currentMode: null,
+      isConnected: false,
+      bluetoothAvailable: false,
+      wifiAvailable: false,
+      lastUpdate: null
+    });
+    
+    // 传感器数据
+    const sensorData = ref({
       angleX: 0,
       accX: 0,
       accY: 0,
       accZ: 0,
       servoPosition: 0,
-      timestamp: null
+      timestamp: null,
+      source: null
     });
+    
+    // 图表引用
+    const chart = ref(null);
+    
+    // 优先模式选择
+    const preferredMode = ref('bluetooth');
 
     /**
-     * WebSocket获取实时云台数据
+     * WebSocket连接
      */
     const connectWebSocket = () => {
       socket = new WebSocket(`ws://localhost:${SERVER_PORT}`);
@@ -62,7 +119,7 @@ export default {
 
       socket.onmessage = (event) => {
         try {
-          const { type, data } = JSON.parse(event.data);
+          const { type, data, source } = JSON.parse(event.data);
           
           if (type === 'sensor_data') {
             // 更新传感器数据
@@ -72,7 +129,8 @@ export default {
               accY: parseInt(data.accY),
               accZ: parseInt(data.accZ),
               servoPosition: parseInt(data.servoPosition),
-              timestamp: data.lastUpdate
+              timestamp: data.lastUpdate,
+              source: source
             };
             
             // 更新图表
@@ -80,10 +138,19 @@ export default {
               chart.value.updateChart(sensorData.value.angleX);
             }
             
-          } else if (type === 'status') {
-            connected.value = data.isConnected;
-          } else if (type === 'error') {
-            console.error('Error:', data);
+          } else if (type === 'comm_status') {
+            // 更新通信状态
+            commStatus.value = {
+              preferredMode: data.preferredMode,
+              currentMode: data.currentMode,
+              isConnected: data.isConnected,
+              bluetoothAvailable: data.bluetoothAvailable,
+              wifiAvailable: data.wifiAvailable,
+              lastUpdate: data.lastUpdate
+            };
+            
+            // 同步优先模式选择
+            preferredMode.value = data.preferredMode;
           }
         } catch (e) {
           console.error('Error parsing WebSocket message:', e);
@@ -91,7 +158,7 @@ export default {
       };
 
       socket.onclose = () => {
-        connected.value = false;
+        commStatus.value.isConnected = false;
         console.log('Disconnected from WebSocket server');
       };
 
@@ -117,10 +184,36 @@ export default {
           throw new Error(errorData.message || 'Request failed');
         }
         
-        console.log('Rotation request sent successfully');
+        const result = await response.json();
+        console.log(`旋转命令已通过${result.mode === 'bluetooth' ? '蓝牙' : 'WiFi'}发送`);
       } catch (error) {
         console.error('Error:', error);
         alert(`操作失败: ${error.message}`);
+      }
+    };
+    
+    /**
+     * 设置优先通信模式
+     */
+    const setPreferredMode = async () => {
+      try {
+        const response = await fetch(`http://localhost:${SERVER_PORT}/api/set_preferred_mode`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ mode: preferredMode.value })
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || 'Failed to set preferred mode');
+        }
+        
+        console.log(`优先通信模式已设置为: ${preferredMode.value}`);
+      } catch (error) {
+        console.error('Error:', error);
+        alert(`设置失败: ${error.message}`);
       }
     };
 
@@ -135,55 +228,67 @@ export default {
     });
 
     return {
-      connected,
+      commStatus,
       sensorData,
       chart,
-      sendRotateRequest
+      preferredMode,
+      sendRotateRequest,
+      setPreferredMode
     };
   }
 };
-
 </script>
 
 <style>
 /* ======================================== 主容器样式 ======================================== */
 .app-container {
   display: flex;
-  justify-content: space-between; /* 子元素之间留有间隔 */
+  justify-content: space-between;
   margin: 0 auto;
   padding: 20px;
   font-family: Arial, sans-serif;
 }
 
 .content-left {
-  flex: 1; 
+  flex: 2; 
   padding: 10px;
-  width: 800px;
+  min-width: 0; /* 防止内容溢出 */
+  width: 1200px;
 }
 
 .content-right {
   flex: 1;
   padding: 10px;
-  width: 400px;
+  min-width: 300px;
 }
 
 h1 {
   text-align: center;
   color: #333;
+  margin-bottom: 20px;
 }
 
-h2 {
-  color: #333;;
+h2, h3 {
+  color: #333;
+  margin-top: 0;
 }
 
-/* ======================================== Echart相关组件样式 ======================================== */
+/* ======================================== 连接状态样式 ======================================== */
+.connection-status {
+  background-color: #f5f5f5;
+  border-radius: 8px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
 .status {
   text-align: center;
   padding: 10px;
-  margin: 20px 0;
+  margin-bottom: 10px;
+  border-radius: 4px;
+  font-weight: bold;
   background-color: #ffebee;
   color: #c62828;
-  border-radius: 4px;
 }
 
 .status.connected {
@@ -191,47 +296,99 @@ h2 {
   color: #2e7d32;
 }
 
-.angle-chart-container {
-  width: 100%;
-  height: 400px;
+.mode-info {
+  text-align: center;
+  margin: 10px 0;
+  font-size: 14px;
 }
-.chart {
-  width: 100%;
-  height: 100%;
+
+.available-modes {
+  display: flex;
+  justify-content: space-around;
+  font-size: 13px;
+  color: #666;
+}
+
+/* ======================================== 传感器数据样式 ======================================== */
+.sensor-data {
+  background-color: #f9f9f9;
+  border-radius: 8px;
+  padding: 15px;
+  margin-top: 20px;
+}
+
+.sensor-data p {
+  margin: 8px 0;
+  font-size: 14px;
 }
 
 /* ======================================== 控制面板样式 ======================================== */
+.panel-wrapper {
+  background-color: #f9f9f9;
+  border-radius: 8px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  height: 100%;
+  box-sizing: border-box;
+}
+
 .panel-button {
-  display: inline-block;
-  padding: 10px 20px;
+  display: block;
+  width: 100%;
+  padding: 12px;
   font-size: 16px;
   cursor: pointer;
   text-align: center;
-  text-decoration: none;
-  outline: none;
   color: #fff;
-  background-color: skyblue;
+  background-color: #42a5f5;
   border: none;
-  border-radius: 15px;
-  box-shadow: 0 4px #9E9E9E;
-  transition-duration: 0.4s; /* 鼠标悬停过渡效果 */
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: all 0.3s;
+  margin: 20px 0;
 }
 
-.panel-button:hover { /* 悬停时背景颜色变浅 */
-  background-color: blue;
+.panel-button:hover {
+  background-color: #1e88e5;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
 }
 
-.panel-button:active { 
-  background-color: skyblue;
-  box-shadow: 0 2px #666;
+.panel-button:active {
   transform: translateY(2px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-.panel-wrapper {
-  background-color: #f9f9f9; 
-  border-radius: 8px; /* 圆角边框 */
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* 阴影效果 */
-  padding: 20px;
-  text-align: center;
+/* ======================================== 模式选择器样式 ======================================== */
+.mode-selector {
+  margin-top: 30px;
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.radio-group label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.radio-group input[type="radio"] {
+  margin-right: 8px;
+}
+
+/* ======================================== 响应式设计 ======================================== */
+@media (max-width: 768px) {
+  .app-container {
+    flex-direction: column;
+  }
+  
+  .content-left, .content-right {
+    width: 100%;
+  }
 }
 </style>
