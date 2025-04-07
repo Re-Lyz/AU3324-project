@@ -700,6 +700,7 @@ void processWireless() {
     unsigned long currentTime = millis();
     if (currentTime - lastHeartbeatTime > HEARTBEAT_INTERVAL) {
       SerialBT.println("HEARTBEAT:" + String(currentTime/1000));
+      SerialBT.println("DATA:" + String(currentSpeed) + ":" + String(currentAcceleration));
       lastHeartbeatTime = currentTime;
     }
   }
