@@ -315,6 +315,7 @@ void loop() {
     }
     Serial.print("初始角度：");
     Serial.println(originAngle);
+
   }
 
   processSensors(modifiedSpeed, modifiedAcceleration);
@@ -332,6 +333,7 @@ void loop() {
     int32_t data = ((int32_t)highWord << 16) | lowWord;
     currentAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
   }
+
 
   if (targetPosition < currentAngle - originAngle - positionTolerance) {
     start = true;
@@ -570,10 +572,118 @@ void stopServo() {
   node.writeSingleRegister(0x2300, 1);
   delay(50);
 
+void processControl() {
+  if (useTrapezoidalProfile) {
+    //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
+    // node.writeSingleRegister(0x2109, 1);
+    // delay(50);
+    // node.writeSingleRegister(0x2310, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2311, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2314, 4);
+    // delay(50);
+    // node.writeSingleRegister(0x2315, 1);
+    // delay(50);
+
+    // int32_t displacement = 60;  // 第1段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x2321, 20);  //第1段目标速度
+    // delay(50);
+    // node.writeSingleRegister(0x2322, 10);  //第1段加速度
+    // delay(50);
+    // node.writeSingleRegister(0x2323, 0);  //第1段减速度
+    // delay(50);
+    // node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
+    // delay(50);
+
+    // displacement = 390;  // 第2段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x2325, 2);
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x2326, 20);
+    // delay(50);
+    // node.writeSingleRegister(0x2327, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2328, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2329, 0);
+    // delay(50);
+
+    // displacement = 50;  // 第3段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x232A, 2);
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x232B, 1);
+    // delay(50);
+    // node.writeSingleRegister(0x232C, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x232D, 10);
+    // delay(50);
+    // node.writeSingleRegister(0x232E, 0);
+    // delay(50);
+
+    // displacement = 0;  // 第4段位移
+    // node.setTransmitBuffer(1, lowWord(displacement));
+    // node.setTransmitBuffer(0, highWord(displacement));
+    // node.writeMultipleRegisters(0x232F, 2);
+    // delay(50);
+    // node.clearTransmitBuffer();
+    // node.writeSingleRegister(0x2330, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2331, 0);
+    // delay(50);
+    // node.writeSingleRegister(0x2332, 1);
+    // delay(50);
+    // node.writeSingleRegister(0x2333, 1000);
+    // delay(50);
+
+    // node.writeSingleRegister(0x2300, 2);
+    // delay(50);
+    node.writeSingleRegister(0x2109, 2);
+    delay(50);
+    node.writeSingleRegister(0x2380, 1);
+    delay(50);
+    node.writeSingleRegister(0x2382, 1);
+    delay(50);
+    node.writeSingleRegister(0x2385, 10);
+    delay(50);
+    node.writeSingleRegister(0x2390, 20);//第一段
+    delay(50);
+    node.writeSingleRegister(0x2391, 17);
+    delay(50);
+    node.writeSingleRegister(0x2300, 2);
+    delay(50);
+  } else {
+    node.writeSingleRegister(0x2109, 2);
+    delay(50);
+    node.writeSingleRegister(0x2380, 1);
+    delay(50);
+    node.writeSingleRegister(0x2382, 1);
+    delay(50);
+    node.writeSingleRegister(0x2385, 10);
+    delay(50);
+    node.writeSingleRegister(0x2390, 20);//第一段
+    delay(50);
+    node.writeSingleRegister(0x2391, 17);
+    delay(50);
+    node.writeSingleRegister(0x2300, 2);
+    delay(50);
+  }
 }
 
-// 显示模块：更新 OLED 显示内容
+
+// 显示模块：更新 OLED 显示屏内容
 void processDisplay() {
+  // 清空屏幕
   display.clearDisplay();
 
   int16_t ax, ay, az;
@@ -583,27 +693,67 @@ void processDisplay() {
   // 计算 X 轴角度
   AccXangle = atan((float)ay / sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
 
+  // 显示角度和速度信息 (顶部区域)
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
+  
+  // 第一行：显示角度
   display.setCursor(0, 0);
-  display.print("Angle X: ");
-  display.println(currentSpeed);
+  display.print("Angle: ");
+  display.print(AccXangle, 1);
+  display.print("°");
+  
+  // 第二行：显示当前速度
+  display.setCursor(0, 10);
+  display.print("Speed: ");
+  display.print(currentSpeed, 1);
+  display.print("°/s");
+  
+  // 第三行：显示当前加速度
+  display.setCursor(0, 20);
+  display.print("Accel: ");
+  display.print(currentAcceleration, 1);
+  display.print("°/s²");
 
-  // 显示蓝牙连接状态
-  display.setCursor(0, 56);
+  // 绘制速度曲线图 (中间区域)
+  const int graphHeight = 20;
+  const int graphWidth = SCREEN_WIDTH;
+  const int graphY = 30;  // Start below text area
+  
+  display.drawLine(0, graphY + graphHeight/2, graphWidth, graphY + graphHeight/2, SSD1306_WHITE); // X-axis
+  display.drawLine(0, graphY, 0, graphY + graphHeight, SSD1306_WHITE); // Y-axis
+  display.setCursor(graphWidth/2 - 20, graphY - 8);
+  display.print("Speed Curve");
+
+  static float prevSpeed = 0;
+  int prevY = graphY + graphHeight/2 - constrain(prevSpeed * 2, -graphHeight/2, graphHeight/2);
+  
+  for (int x = 1; x < graphWidth; x++) {
+    float simulatedSpeed = currentSpeed * sin(x * 0.1);
+    int y = graphY + graphHeight/2 - constrain(simulatedSpeed * 2, -graphHeight/2, graphHeight/2);
+    display.drawLine(x-1, prevY, x, y, SSD1306_WHITE);
+    prevY = y;
+  }
+
+  // 绘制指示线 (在曲线图下方)
+  int x_center = SCREEN_WIDTH / 2;
+  int y_indicator = graphY + graphHeight + 10; // Position below graph
+  int line_length = 20;
+  int angle_rad = AccXangle * PI / 180;
+  int x_end = x_center + line_length * sin(angle_rad);
+  int y_end = y_indicator - line_length * cos(angle_rad);
+
+  display.drawLine(x_center, y_indicator, x_end, y_end, SSD1306_WHITE);
+
+  // 显示蓝牙连接状态 (底部区域)
+  display.setCursor(0, SCREEN_HEIGHT - 8);
   display.print("BT: ");
   display.print(btConnected ? "Connected" : "Available");
 
-  // 绘制指示线
-  int x_center = SCREEN_WIDTH / 2;
-  int y_center = SCREEN_HEIGHT / 2;
-  int line_length = 30;
-  float angle_rad = AccXangle * PI / 180.0;
-  int x_end = x_center + line_length * sin(angle_rad);
-  int y_end = y_center - line_length * cos(angle_rad);
-  display.drawLine(x_center, y_center, x_end, y_end, SSD1306_WHITE);
-
+  // 更新显示
   display.display();
+  prevSpeed = currentSpeed;
+
 }
 
   
