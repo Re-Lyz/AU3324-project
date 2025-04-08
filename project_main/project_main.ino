@@ -271,7 +271,7 @@ void setup() {
     Serial.println(node.getResponseBuffer(0));
     Serial.print("Register 1: ");
     Serial.println(node.getResponseBuffer(1));
-    node.clearResponseBuffer();
+    // node.clearResponseBuffer();
   } else {
     Serial.print("Error reading registers, error code: ");
     Serial.println(result);
@@ -318,7 +318,7 @@ void initHardware() {
   Wire.begin();
   // 初始化 OLED 显示屏
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    //Serial.println("OLED failed");
+    Serial.println("OLED failed");
     while (1);
   }
   display.clearDisplay();
@@ -335,14 +335,14 @@ void initHardware() {
   Serial2.begin(RS485_BAUD, SERIAL_8N1, 17, 16);
   node.begin(01, Serial2);
   Serial.println("Modbus RTU initialization complete.");
-  // node.writeSingleRegister(0x2008, 1);  //复位操作
-  // delay(50);
+  node.writeSingleRegister(0x2008, 1);  //复位操作
+  delay(50);
   node.writeSingleRegister(0x2010, 1);  //复位操作
   delay(50);
-  node.writeSingleRegister(0x200A, 1);  //恢复出厂设置
-  delay(50);
+  // node.writeSingleRegister(0x200A, 1);  //恢复出厂设置
+  // delay(50);
   // node.writeSingleRegister(0x2101, 1);  //位置清零
-  delay(3000);
+  delay(1000);
 
   // 蓝牙初始化
   if (!SerialBT.begin("ESP32_Servo")) {  // 设备名称
@@ -494,7 +494,7 @@ void mode3(){
   delay(50);
 }
 
-//-------MODE1 转180------------
+//-------MODE1 pid转180------------
 void mode1() {
   float modifiedSpeed = 0;
   float modifiedAcceleration = 0;
@@ -502,8 +502,8 @@ void mode1() {
   if (start) {
     processControl();
     // PID控制器实例
-    pidSpeedT.init(3, 0.05, 0.01);         // 用于速度控制的PID 梯形曲线
-    pidAccelerationT.init(3, 0.05, 0.01);  // 用于加减速控制的PID
+    pidSpeedT.init(0, 0.00, 0.00);         // 用于速度控制的PID 梯形曲线
+    pidAccelerationT.init(0, 0.00, 0.00);  // 用于加减速控制的PID
     pidSpeedS.init(2, 0.05, 0.02);         // 用于速度控制的PID s曲线
     pidAccelerationS.init(2, 0.05, 0.01);  // 用于加减速控制的PID
 
@@ -512,18 +512,20 @@ void mode1() {
     Serial.print("初始时间：");
     Serial.println(offset / 1000);
 
-    uint8_t result = node.readHoldingRegisters(0x6064, 2);
+    delay(20);
+    uint8_t result = node.readHoldingRegisters(0x6077, 2);
     if (result == node.ku8MBSuccess) {
       uint16_t highWord = node.getResponseBuffer(0);  // 高16位
       uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
 
       // 合并为一个32位数据（注意数据的符号问题）
       int32_t data = ((int32_t)highWord << 16) | lowWord;
-      originAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
-      node.clearResponseBuffer();
+      originAngle = data / 1000 * 360;  //记录初始角度，用于计算是否旋转了180°
+      // node.clearResponseBuffer();
+      Serial.print("初始角度：");
+      Serial.println(originAngle);
     }
-    Serial.print("初始角度：");
-    Serial.println(originAngle);
+
   }
 
   processSensors(modifiedSpeed, modifiedAcceleration);
@@ -532,51 +534,55 @@ void mode1() {
   processDisplay();
   processWireless();
 
-  uint8_t result = node.readHoldingRegisters(0x6064, 2);
-  if (result == node.ku8MBSuccess) {
-    uint16_t highWord = node.getResponseBuffer(0);  // 高16位
-    uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
+  // delay(20);
+  // uint8_t result = node.readHoldingRegisters(0x6077, 2);
+  // if (result == node.ku8MBSuccess) {
+  //   uint16_t highWord = node.getResponseBuffer(0);  // 高16位
+  //   uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
 
-    // 合并为一个32位数据（注意数据的符号问题）
-    int32_t data = ((int32_t)highWord << 16) | lowWord;
-    currentAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
-    node.clearResponseBuffer();
-  }
-  Serial.print("当前角度：");
-  Serial.println(currentAngle);
+  //   // 合并为一个32位数据（注意数据的符号问题）
+  //   int32_t data = ((int32_t)highWord << 16) | lowWord;
+  //   currentAngle = data / ONE_ROLL * 360;  //记录角度，用于计算是否旋转了180°
+  //   Serial.print("当前角度：");
+  //   Serial.println(currentAngle);
+  //   // node.clearResponseBuffer();
+  // }
 
-  if (180 < currentAngle - originAngle) {
-    start = true;
-    useTrapezoidalProfile = !useTrapezoidalProfile;
-    stopServo();
 
-    delay(8000);
-    clearSpeedHistory();
-    //可以写一些后续的其他操作……
-  }
+  // if (180 < currentAngle - originAngle) {
+  //   start = true;
+  //   useTrapezoidalProfile = !useTrapezoidalProfile;
+  //   stopServo();
+
+  //   delay(5000);
+  //   clearSpeedHistory();
+  //   //可以写一些后续的其他操作……
+  // }
 }
-
 
 // 传感器模块：读取速度并计算PID调整值
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   float targetSpeed, targetAcceleration;
 
+  delay(20);
   uint8_t result = node.readHoldingRegisters(0x606C, 2);
   if (result == node.ku8MBSuccess) {
     uint16_t highWord = node.getResponseBuffer(0);  // 高16位
     uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
     int32_t data = ((int32_t)highWord << 16) | lowWord;
+    Serial.print("data:");
+    Serial.println(data);
     currentSpeed = data;
-    node.clearResponseBuffer();
+    //node.clearResponseBuffer();
   }
-  delay(10);
+  delay(20);
   result = node.readHoldingRegisters(0x606C, 2);
   if (result == node.ku8MBSuccess) {
     uint16_t highWord = node.getResponseBuffer(0);  // 高16位
     uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
     int32_t data = ((int32_t)highWord << 16) | lowWord;
-    currentAcceleration = (data - currentSpeed) * 10000 / (60 * 50);
-    node.clearResponseBuffer();
+    currentAcceleration = (data - currentSpeed) * 5000 / (60 * 50);
+    //node.clearResponseBuffer();
   }
   float currentTime = (millis() - offset) / 1000.0;  // 当前时间（秒）
 
@@ -586,17 +592,17 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   } else {
     sCurve.updateProfile(currentTime, targetSpeed, targetAcceleration);
   }
-  if (int(currentTime * 10) % 5 == 0) {
-    Serial.print("currentTime:");
-    Serial.println(currentTime);
+  if (true) {
+    // Serial.print("currentTime:");
+    // Serial.println(currentTime);
     Serial.print("currentSpeed:");
     Serial.println(currentSpeed);
-    Serial.print("currentAcceleration:");
-    Serial.println(currentAcceleration);
+    // Serial.print("currentAcceleration:");
+    // Serial.println(currentAcceleration);
     Serial.print("Target Speed: ");
     Serial.println(targetSpeed);
-    Serial.print("Target Acceleration: ");
-    Serial.println(targetAcceleration);
+    // Serial.print("Target Acceleration: ");
+    // Serial.println(targetAcceleration);
   }
 
   // 使用PID计算修正值
@@ -629,9 +635,10 @@ void processControl() {
 // 控制模块：根据传入的修改后的速度和加速度设置Modbus寄存器
 void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
   modifiedAcceleration += currentAcceleration;
-  modifiedSpeed += currentSpeed;
+  //modifiedSpeed += currentSpeed;
   node.writeSingleRegister(0x2385, modifiedAcceleration);
-  node.writeSingleRegister(0x2390, modifiedSpeed);
+  //delay(20);
+  //node.writeSingleRegister(0x2390, modifiedSpeed);
 
   // 打印输出
   // Serial.print("Modified Speed: ");
@@ -757,8 +764,8 @@ void processWireless() {
   while (SerialBT.available()) {
     String command = SerialBT.readStringUntil('\n');
     command.trim();
-    Serial.print("蓝牙消息：");
-    Serial.println(command);
+    //Serial.print("蓝牙消息：");
+    //Serial.println(command);
     handleCommand(command);
   }
 
@@ -786,7 +793,7 @@ void handleCommand(String cmd) {
   } else if (cmd == "GET_DATA") {
     String dataStr = getServoDataStr();
     SerialBT.print(dataStr);
-    Serial.println("Sent sensor data: " + dataStr);
+    //Serial.println("Sent sensor data: " + dataStr);
   } else {
     Serial.print("==========> 蓝牙命令不存在：");
     Serial.println(cmd);
