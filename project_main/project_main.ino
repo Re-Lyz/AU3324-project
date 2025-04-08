@@ -329,7 +329,8 @@ void loop() {
   regulateControl(modifiedSpeed, modifiedAcceleration);
 
   processDisplay();
-  //processWireless();
+  processWireless();
+  processWifiServer();
 
   uint8_t result = node.readHoldingRegisters(0x6064, 2);
   if (result == node.ku8MBSuccess) {
@@ -401,7 +402,7 @@ void initHardware() {
   }
 
   // Wifi初始化
-  WiFi.softAP(SSID, PASSWORD);
+  WiFi.softAP(SSID, PASSWORD, 1, 0, 4); // 信道1, 不隐藏SSID, 最大连接数4
   Serial.println("热点已启动");
   Serial.print("SSID: ");
   Serial.println(SSID);
@@ -740,6 +741,25 @@ void handleCommand(String cmd) {
   }
 }
 
+
+void processWifiServer() {
+  if (!wifiClient || !wifiClient.connected()) {
+    wifiClient = wifiServer.available();
+    if (wifiClient) {
+        Serial.println("New WiFi client connected");
+    }
+  }
+
+  // 处理 WiFi 客户端数据
+  if (wifiClient && wifiClient.connected()) {
+    while (wifiClient.available()) {
+        String command = wifiClient.readStringUntil('\n');
+        command.trim();
+        handleCommand(command);
+    }
+  }
+}
+
 // 发送传感器数据
 void sendSensorData() {
   String dataStr = getServoDataStr();
@@ -759,6 +779,8 @@ void sendSensorData() {
 String getServoDataStr() {
   return "DATA:" + String(currentSpeed) + ":" + String(currentAcceleration);
 }
+
+
 
 //----------测试部分------------
 // void debug() {
