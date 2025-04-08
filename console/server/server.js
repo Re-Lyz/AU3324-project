@@ -16,10 +16,12 @@ const BAUD_RATE = 57600;
 
 // 通信状态
 const commState = {
-  preferredMode: 'bluetooth', // 优先使用蓝牙
-  currentMode: null,          // 当前实际使用的通信模式
-  isConnected: false,         // 当前连接状态
-  lastUpdate: null,           // 最后更新时间
+  preferredMode: 'bluetooth', 
+  currentMode: null,          
+  isConnected: false,       
+  bluetoothAvailable: false,
+  wifiAvailable: false,
+  lastUpdate: null,   
 };
 
 // 系统状态
@@ -63,11 +65,12 @@ app.use(cors({
   allowedHeaders: ['Content-Type']
 }));
 
+// ==================================================== 蓝牙通信 ====================================================
+
 /**
  * 初始化串口连接
  */
 function initSerialPort() {
-  // 如果已有连接，先关闭
   if (systemState.port && systemState.port.isOpen) {
     systemState.port.close();
   }
@@ -78,42 +81,45 @@ function initSerialPort() {
     autoOpen: false
   });
 
-  // 创建解析器
   systemState.parser = systemState.port.pipe(new ReadlineParser({ delimiter: '\n' }));
-
-  // 事件处理
   systemState.port.on('open', () => {
     console.log(`Serial port ${SERIAL_PORT} opened`);
+    commState.bluetoothAvailable = true;
     updateConnectionStatus(true);
+    updateCommStatus();
     startDataCollection();
   });
 
   systemState.port.on('close', () => {
     console.log(`Serial port ${SERIAL_PORT} closed`);
+    commState.bluetoothAvailable = false;
     updateConnectionStatus(false);
+    updateCommStatus();
   });
 
   systemState.port.on('error', (err) => {
     console.error('Serial port error:', err);
+    commState.bluetoothAvailable = false;
     updateConnectionStatus(false);
+    updateCommStatus();
   });
 
-  // 数据接收处理
   systemState.parser.on('data', (data) => {
     processIncomingData(data);
   });
 
-  // 尝试打开端口
   systemState.port.open((err) => {
     if (err) {
       console.error('Failed to open serial port:', err.message);
+      commState.bluetoothAvailable = false;
       updateConnectionStatus(false);
+      updateCommStatus();
     }
   });
 }
 
 /**
- * 处理接收到的数据
+ * 处理接收到的蓝牙数据
  */
 function processIncomingData(rawData) {
   console.log('Received raw data:', rawData);
@@ -128,21 +134,25 @@ function processIncomingData(rawData) {
           lastUpdate: new Date().toISOString()
         };
         
-        console.log("==========> Data: " + JSON.stringify(systemState.sensorData));
-        // 广播给所有客户端
-        broadcastToClients({
-          type: 'sensor_data',
-          data: systemState.sensorData
-        });
+        console.log("==========> Bluetooth Data: " + JSON.stringify(systemState.sensorData));
+        
+        // 如果蓝牙是首选模式或WiFi不可用，使用蓝牙数据
+        if (commState.preferredMode === 'bluetooth' || !wifiState.isAvailable) {
+          broadcastToClients({
+            type: 'sensor_data',
+            data: systemState.sensorData,
+            source: 'bluetooth'
+          });
+        }
       }
     }
   } catch (e) {
-    console.error('Data parsing error:', e);
+    console.error('Bluetooth data parsing error:', e);
   }
 }
 
 /**
- * 更新连接状态并通知客户端
+ * 更新蓝牙连接状态
  */
 function updateConnectionStatus(isConnected) {
   if (systemState.isConnected !== isConnected) {
@@ -152,26 +162,20 @@ function updateConnectionStatus(isConnected) {
       stopDataCollection();
     }
     
-    broadcastToClients({
-      type: 'status',
-      data: {
-        isConnected: isConnected,
-        lastUpdate: new Date().toISOString()
-      }
-    });
+    updateCommStatus();
     
     // 如果断开连接，尝试重新连接
     if (!isConnected) {
-      setTimeout(initSerialPort, 5000); // 5秒后尝试重连
+      setTimeout(initSerialPort, 5000);
     }
   }
 }
 
 /**
- * 开始数据采集
+ * 开始蓝牙数据采集
  */
 function startDataCollection() {
-  stopDataCollection(); // 确保先停止之前的
+  stopDataCollection();
   
   systemState.dataInterval = setInterval(() => {
     if (systemState.isConnected && systemState.port?.isOpen) {
@@ -185,38 +189,195 @@ function startDataCollection() {
     }
   }, DATA_INTERVAL);
   
-  console.log('Started data collection');
+  console.log('Started Bluetooth data collection');
 }
 
 /**
- * 停止数据采集
+ * 停止蓝牙数据采集
  */
 function stopDataCollection() {
   if (systemState.dataInterval) {
     clearInterval(systemState.dataInterval);
     systemState.dataInterval = null;
-    console.log('Stopped data collection');
+    console.log('Stopped Bluetooth data collection');
+  }
+}
+
+// ==================================================== WiFi通信 ====================================================
+
+/**
+ * 初始化WiFi连接
+ */
+function initWifiConnection() {
+  // 关闭现有连接
+  if (wifiState.socket) {
+    wifiState.socket.destroy();
+    clearTimeout(wifiState.reconnectTimer);
+  }
+
+  wifiState.socket = new net.Socket();
+  
+  wifiState.socket.on('connect', () => {
+    console.log('WiFi connected to', WIFI_CONFIG.host);
+    wifiState.isAvailable = true;
+    commState.wifiAvailable = true;
+    updateCommStatus();
+    startWifiDataCollection();
+  });
+
+  wifiState.socket.on('data', (data) => {
+    processWifiData(data.toString());
+  });
+
+  wifiState.socket.on('error', (err) => {
+    console.error('WiFi connection error:', err);
+    handleWifiDisconnect();
+  });
+
+  wifiState.socket.on('close', () => {
+    console.log('WiFi connection closed');
+    handleWifiDisconnect();
+  });
+
+  // 尝试连接
+  wifiState.socket.connect(WIFI_CONFIG.port, WIFI_CONFIG.host);
+}
+
+/**
+ * 处理WiFi断开连接
+ */
+function handleWifiDisconnect() {
+  wifiState.isAvailable = false;
+  commState.wifiAvailable = false;
+  stopWifiDataCollection();
+  updateCommStatus();
+  
+  // 尝试重新连接
+  wifiState.reconnectTimer = setTimeout(() => {
+    initWifiConnection();
+  }, WIFI_CONFIG.reconnectInterval);
+}
+
+/**
+ * 处理接收到的WiFi数据
+ */
+function processWifiData(rawData) {
+  try {
+    if (rawData.startsWith('DATA:')) {
+      const parts = rawData.substring(5).split(':');
+      if (parts.length == 2) {
+        wifiState.sensorData = {
+          speed: parseFloat(parts[0]),
+          acceleration: parseFloat(parts[1]),
+          lastUpdate: new Date().toISOString()
+        };
+        
+        console.log("==========> WiFi Data: " + JSON.stringify(wifiState.sensorData));
+        
+        // 如果WiFi是首选模式或蓝牙不可用，使用WiFi数据
+        if (commState.preferredMode === 'wifi' || !systemState.isConnected) {
+          broadcastToClients({
+            type: 'sensor_data',
+            data: wifiState.sensorData,
+            source: 'wifi'
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.error('WiFi data parsing error:', e);
   }
 }
 
 /**
- * WebSocket连接处理
+ * 开始WiFi数据采集
  */
+function startWifiDataCollection() {
+  stopWifiDataCollection();
+  
+  wifiState.dataInterval = setInterval(() => {
+    if (wifiState.socket && wifiState.isAvailable) {
+      wifiState.socket.write('GET_DATA\n');
+    }
+  }, DATA_INTERVAL);
+  
+  console.log('Started WiFi data collection');
+}
+
+/**
+ * 停止WiFi数据采集
+ */
+function stopWifiDataCollection() {
+  if (wifiState.dataInterval) {
+    clearInterval(wifiState.dataInterval);
+    wifiState.dataInterval = null;
+    console.log('Stopped WiFi data collection');
+  }
+}
+
+// ==================================================== 通信状态管理 ====================================================
+
+/**
+ * 更新通信状态并通知客户端
+ */
+function updateCommStatus() {
+  const newStatus = {
+    preferredMode: commState.preferredMode,
+    currentMode: determineCurrentMode(),
+    isConnected: systemState.isConnected || wifiState.isAvailable,
+    bluetoothAvailable: systemState.isConnected,
+    wifiAvailable: wifiState.isAvailable,
+    lastUpdate: new Date().toISOString()
+  };
+  
+  // 更新全局状态
+  Object.assign(commState, newStatus);
+  
+  broadcastToClients({
+    type: 'comm_status',
+    data: newStatus
+  });
+}
+
+/**
+ * 确定当前使用的通信模式
+ */
+function determineCurrentMode() {
+  if (commState.preferredMode === 'bluetooth' && systemState.isConnected) {
+    return 'bluetooth';
+  }
+  if (commState.preferredMode === 'wifi' && wifiState.isAvailable) {
+    return 'wifi';
+  }
+  if (wifiState.isAvailable) return 'wifi';
+  if (systemState.isConnected) return 'bluetooth';
+  return null;
+}
+
+// ==================================================== 前后端数据传输 ====================================================
+
 wss.on('connection', (ws) => {
   console.log('Client connected');
   
   // 发送初始状态和数据
   ws.send(JSON.stringify({
-    type: 'status',
+    type: 'comm_status',
     data: {
-      isConnected: systemState.isConnected,
-      lastUpdate: new Date().toISOString()
+      preferredMode: commState.preferredMode,
+      currentMode: commState.currentMode,
+      isConnected: commState.isConnected,
+      bluetoothAvailable: commState.bluetoothAvailable,
+      wifiAvailable: commState.wifiAvailable,
+      lastUpdate: commState.lastUpdate
     }
   }));
   
+  // 发送当前数据
+  const currentData = commState.currentMode === 'wifi' ? wifiState.sensorData : systemState.sensorData;
   ws.send(JSON.stringify({
     type: 'sensor_data',
-    data: systemState.sensorData
+    data: currentData,
+    source: commState.currentMode
   }));
   
   ws.on('close', () => {
@@ -235,36 +396,97 @@ function broadcastToClients(message) {
   });
 }
 
+// ==================================================== API接口 ====================================================
+
 /**
- * API端点 - 旋转180度
+ * 设置优先通信模式
  */
-app.post('/api/rotate', (req, res) => {
-  console.log('==========> 【POST】旋转180度');
+app.post('/api/set_preferred_mode', (req, res) => {
+  const { mode } = req.body;
   
-  if (!systemState.isConnected || !systemState.port?.isOpen) {
+  if (mode !== 'bluetooth' && mode !== 'wifi') {
     return res.status(400).json({ 
-      message: 'Device is not connected. Please check the connection.' 
+      message: 'Invalid mode. Must be "bluetooth" or "wifi"' 
     });
   }
 
-  const command = 'ROTATE\n';
-  systemState.port.write(command, (err) => {
-    if (err) {
-      console.error('Write error:', err);
-      updateConnectionStatus(false);
-      return res.status(500).json({ 
-        message: 'Failed to send command. Connection may be lost.' 
-      });
-    }
-    console.log('Rotation command sent');
-    res.status(200).json({ message: 'Rotation command sent successfully' });
+  commState.preferredMode = mode;
+  updateCommStatus();
+  
+  res.status(200).json({ 
+    message: `Preferred mode set to ${mode}`,
+    currentMode: commState.currentMode
   });
 });
 
-// 启动服务器
+/**
+ * 旋转云台
+ */
+app.post('/api/rotate', (req, res) => {
+  if (commState.preferredMode === 'bluetooth' && systemState.isConnected) {
+    // 通过蓝牙发送
+    const command = 'ROTATE\n';
+    systemState.port.write(command, (err) => {
+      if (err) {
+        updateConnectionStatus(false);
+        return tryWifiFallback(res);
+      }
+      res.status(200).json({ 
+        message: 'Rotation command sent via Bluetooth',
+        mode: 'bluetooth'
+      });
+    });
+  } else if (wifiState.isAvailable) {
+    // 通过WiFi发送
+    wifiState.socket.write('ROTATE\n', (err) => {
+      if (err) {
+        handleWifiDisconnect();
+        return res.status(500).json({ 
+          message: 'Failed to send command via WiFi' 
+        });
+      }
+      res.status(200).json({ 
+        message: 'Rotation command sent via WiFi',
+        mode: 'wifi'
+      });
+    });
+  } else {
+    res.status(400).json({ 
+      message: 'No available connection' 
+    });
+  }
+});
+
+/**
+ * WiFi备用方案
+ */
+function tryWifiFallback(res) {
+  if (wifiState.isAvailable) {
+    wifiState.socket.write('ROTATE\n', (err) => {
+      if (err) {
+        handleWifiDisconnect();
+        return res.status(500).json({ 
+          message: 'Failed to send command via both Bluetooth and WiFi' 
+        });
+      }
+      res.status(200).json({ 
+        message: 'Rotation command sent via WiFi (Bluetooth failed)',
+        mode: 'wifi'
+      });
+    });
+  } else {
+    res.status(400).json({ 
+      message: 'Bluetooth failed and WiFi not available' 
+    });
+  }
+}
+
+// ==================================================== 服务器启动 ====================================================
+
 const server = app.listen(PORT, () => {
   console.log(`Server is listening on port ${PORT}`);
-  initSerialPort(); // 初始化串口连接
+  initSerialPort(); // 初始化蓝牙串口连接
+  initWifiConnection(); // 初始化WiFi连接
 });
 
 // WebSocket服务器升级处理
@@ -274,20 +496,33 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-// 优雅关闭处理
+// 优雅关闭
 process.on('SIGINT', () => {
   console.log('Shutting down server...');
-  
-  // 关闭串口连接
+
   if (systemState.port?.isOpen) {
     systemState.port.close();
   }
-  
-  // 关闭WebSocket服务器
+
+  if (wifiState.socket) {
+    wifiState.socket.destroy();
+    clearTimeout(wifiState.reconnectTimer);
+  }
+
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.close();
+    }
+  });
   wss.close();
-  
-  // 关闭HTTP服务器
+
   server.close(() => {
+    console.log('Server shutdown complete');
     process.exit(0);
   });
+
+  setTimeout(() => {
+    console.warn('Forcing shutdown after timeout');
+    process.exit(0);
+  }, 5000);
 });
