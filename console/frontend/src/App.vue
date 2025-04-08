@@ -20,11 +20,11 @@
         </div>
       </div>
       
-      <AngleChart ref="chart" />
+      <AngleChart ref="chart" :angle-data="sensorData"/>
       
       <!-- 显示传感器数据 -->
       <div class="sensor-data">
-        <h3>实时数据 ({{ sensorData.source === 'bluetooth' ? '蓝牙' : 'WiFi' }})</h3>
+        <h3>实时数据</h3>
         <p>速度：{{ sensorData.speed }}</p>
         <p>加速度：{{ sensorData.acceleration }}</p>
         <p>更新时间: {{ sensorData.timestamp || '暂无数据' }}</p>

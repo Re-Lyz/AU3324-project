@@ -19,7 +19,7 @@
 #define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // RS485 通信波特率
-#define RS485_BAUD 115200
+#define RS485_BAUD 57600
 
 #define SSID "ESP32_AP"
 #define PASSWORD "12345678"
@@ -76,6 +76,7 @@ void initTorqueMode();
 void processMPU6050();
 void mode1();
 void mode2();
+void mode3();
 
 // PID控制器类
 class PID {
@@ -301,9 +302,9 @@ void setup() {
 // ------------------------ loop() 函数 ------------------------
 void loop() {
   switch (mode) {
-    case 1: mode1(); break;
-    case 2: mode2(); break;
-    case 3: mode3(); break;
+    case 1: mode1(); break;//180度 pid 转
+    case 2: mode2(); break;//平衡 mpu6050
+    case 3: mode3(); break;//前馈 多端位置
     default: break;
   }
 }
@@ -318,18 +319,18 @@ void initHardware() {
   Wire.begin();
   // 初始化 OLED 显示屏
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("OLED failed");
+    //Serial.println("OLED failed");
     while (1);
   }
   display.clearDisplay();
   display.display();
   // 初始化 MPU6050
   mpu.initialize();
-  if (!mpu.testConnection()) {
-    Serial.println("MPU6050 connection failed");
-  } else {
-    Serial.println("MPU6050 connection successful");
-  }
+  // if (!mpu.testConnection()) {
+  //   Serial.println("MPU6050 connection failed");
+  // } else {
+  //   Serial.println("MPU6050 connection successful");
+  // }
 
   // 初始化 RS485 通信：ESP32 的 Serial2 设置为 RX->D16, TX->D17
   Serial2.begin(RS485_BAUD, SERIAL_8N1, 17, 16);
@@ -362,137 +363,6 @@ void initHardware() {
   Serial.println(WiFi.softAPIP());  // 默认IP通常是192.168.4.1
 }  // end of initHardware
 
-//----------MODE2 保持平衡---------------
-void mode2() {
-  if (start) {
-    initTorqueMode();
-    start = !start;
-  }
-  processMPU6050();
-}
-void initTorqueMode() {
-  node.writeSingleRegister(0x2109, 2);
-  delay(50);
-  node.writeSingleRegister(0x23F1, 100);
-  delay(50);
-  node.writeSingleRegister(0x23F2, 50);
-  delay(50);
-  node.writeSingleRegister(0x23F3, 0);
-  delay(50);
-  node.writeSingleRegister(0x2300, 2);
-  delay(50);
-}
-void processMPU6050() {
-  int16_t ax, ay, az, gx, gy, gz;
-  // 读取 MPU6050 的加速度、陀螺仪数据
-  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-
-  // 根据加速度数据计算倾斜角（以 pitch 为例）
-  // 采用 arctan2(accelX, accelZ) 计算倾角，单位转换为度
-  float pitch = atan2((float)ax, (float)az) * 180.0 / PI;
-
-  // 设定期望的水平角度为 0°
-  float error = pitch;  // 如果当前角度偏离0，则 error 为正或负
-
-  // 采用简单比例控制计算目标转矩（单位为百分比，注意转矩单位为 0.1%，例如 100 表示 10%）
-  float Kp = 1.0;                    // 比例增益，实际值需调节
-  float torquePercent = Kp * error;  // 假设1°偏差对应1%的转矩调整
-
-  // 为了与寄存器单位匹配，将转矩百分比除以 0.1得到整数值
-  int16_t torqueReg = (int16_t)(torquePercent / 0.1);
-
-  // 将计算的目标转矩写入目标转矩寄存器（假设 0x23F3 为目标转矩，单位为 0.1%）
-  uint8_t result = node.writeSingleRegister(0x23F3, (uint16_t)torqueReg);
-  delay(50);
-
-  // 调试输出
-  Serial.print("MPU6050 Pitch: ");
-  Serial.print(pitch);
-  Serial.print(" deg, Error: ");
-  Serial.print(error);
-  Serial.print(" deg, Torque Command: ");
-  Serial.print(torqueReg);
-  Serial.println(" (0.1%)");
-}
-
-//-------MODE3 前馈模式------------
-void mode3(){
-  //feedfoward
-    //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
-  node.writeSingleRegister(0x2109, 1);
-  delay(50);
-  node.writeSingleRegister(0x2310, 0);
-  delay(50);
-  node.writeSingleRegister(0x2311, 0);
-  delay(50);
-  node.writeSingleRegister(0x2314, 4);
-  delay(50);
-  node.writeSingleRegister(0x2315, 1);
-  delay(50);
-
-  int32_t displacement = 60;  // 第1段位移
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
-  delay(50);
-  node.clearTransmitBuffer();
-  node.writeSingleRegister(0x2321, 20);  //第1段目标速度
-  delay(50);
-  node.writeSingleRegister(0x2322, 10);  //第1段加速度
-  delay(50);
-  node.writeSingleRegister(0x2323, 0);  //第1段减速度
-  delay(50);
-  node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
-  delay(50);
-
-  displacement = 390;  // 第2段位移
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x2325, 2);
-  delay(50);
-  node.clearTransmitBuffer();
-  node.writeSingleRegister(0x2326, 20);
-  delay(50);
-  node.writeSingleRegister(0x2327, 0);
-  delay(50);
-  node.writeSingleRegister(0x2328, 0);
-  delay(50);
-  node.writeSingleRegister(0x2329, 0);
-  delay(50);
-
-  displacement = 50;  // 第3段位移
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x232A, 2);
-  delay(50);
-  node.clearTransmitBuffer();
-  node.writeSingleRegister(0x232B, 1);
-  delay(50);
-  node.writeSingleRegister(0x232C, 0);
-  delay(50);
-  node.writeSingleRegister(0x232D, 10);
-  delay(50);
-  node.writeSingleRegister(0x232E, 0);
-  delay(50);
-
-  displacement = 0;  // 第4段位移
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x232F, 2);
-  delay(50);
-  node.clearTransmitBuffer();
-  node.writeSingleRegister(0x2330, 0);
-  delay(50);
-  node.writeSingleRegister(0x2331, 0);
-  delay(50);
-  node.writeSingleRegister(0x2332, 1);
-  delay(50);
-  node.writeSingleRegister(0x2333, 1000);
-  delay(50);
-
-  node.writeSingleRegister(0x2300, 2);
-  delay(50);
-}
 
 //-------MODE1 pid转180------------
 void mode1() {
@@ -559,7 +429,6 @@ void mode1() {
   //   //可以写一些后续的其他操作……
   // }
 }
-
 // 传感器模块：读取速度并计算PID调整值
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   float targetSpeed, targetAcceleration;
@@ -597,12 +466,12 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
     // Serial.println(currentTime);
     Serial.print("currentSpeed:");
     Serial.println(currentSpeed);
-    // Serial.print("currentAcceleration:");
-    // Serial.println(currentAcceleration);
+    Serial.print("currentAcceleration:");
+    Serial.println(currentAcceleration);
     Serial.print("Target Speed: ");
     Serial.println(targetSpeed);
-    // Serial.print("Target Acceleration: ");
-    // Serial.println(targetAcceleration);
+    Serial.print("Target Acceleration: ");
+    Serial.println(targetAcceleration);
   }
 
   // 使用PID计算修正值
@@ -614,7 +483,6 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
     modifiedAcceleration = pidAccelerationS.compute(targetAcceleration, currentAcceleration);
   }
 }
-
 void processControl() {
   node.writeSingleRegister(0x2109, 2);
   delay(50);
@@ -631,7 +499,6 @@ void processControl() {
   node.writeSingleRegister(0x2300, 2);
   delay(50);
 }
-
 // 控制模块：根据传入的修改后的速度和加速度设置Modbus寄存器
 void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
   modifiedAcceleration += currentAcceleration;
@@ -646,9 +513,142 @@ void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
   // Serial.print("Modified Acceleration: ");
   // Serial.println(modifiedAcceleration);
 }
-
 void stopServo() {
   node.writeSingleRegister(0x2300, 1);
+  delay(50);
+}
+
+
+//----------MODE2 保持平衡---------------
+void mode2() {
+  if (start) {
+    initTorqueMode();
+    start = !start;
+  }
+  processMPU6050();
+}
+void initTorqueMode() {
+  node.writeSingleRegister(0x2109, 2);
+  delay(50);
+  node.writeSingleRegister(0x23F1, 100);
+  delay(50);
+  node.writeSingleRegister(0x23F2, 50);
+  delay(50);
+  node.writeSingleRegister(0x23F3, 0);
+  delay(50);
+  node.writeSingleRegister(0x2300, 2);
+  delay(50);
+}
+void processMPU6050() {
+  int16_t ax, ay, az, gx, gy, gz;
+  // 读取 MPU6050 的加速度、陀螺仪数据
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  // 根据加速度数据计算倾斜角（以 pitch 为例）
+  // 采用 arctan2(accelX, accelZ) 计算倾角，单位转换为度
+  float pitch = atan2((float)ax, (float)az) * 180.0 / PI;
+
+  // 设定期望的水平角度为 0°
+  float error = pitch;  // 如果当前角度偏离0，则 error 为正或负
+
+  // 采用简单比例控制计算目标转矩（单位为百分比，注意转矩单位为 0.1%，例如 100 表示 10%）
+  float Kp = 1.0;                    // 比例增益，实际值需调节
+  float torquePercent = Kp * error;  // 假设1°偏差对应1%的转矩调整
+
+  // 为了与寄存器单位匹配，将转矩百分比除以 0.1得到整数值
+  int16_t torqueReg = (int16_t)(torquePercent / 0.1);
+
+  // 将计算的目标转矩写入目标转矩寄存器（假设 0x23F3 为目标转矩，单位为 0.1%）
+  uint8_t result = node.writeSingleRegister(0x23F3, (uint16_t)torqueReg);
+  delay(50);
+
+  // 调试输出
+  Serial.print("MPU6050 Pitch: ");
+  Serial.print(pitch);
+  Serial.print(" deg, Error: ");
+  Serial.print(error);
+  Serial.print(" deg, Torque Command: ");
+  Serial.print(torqueReg);
+  Serial.println(" (0.1%)");
+}
+
+
+//-------MODE3 前馈模式------------
+void mode3(){
+  //feedfoward
+    //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
+  node.writeSingleRegister(0x2109, 1);
+  delay(50);
+  node.writeSingleRegister(0x2310, 0);
+  delay(50);
+  node.writeSingleRegister(0x2311, 0);
+  delay(50);
+  node.writeSingleRegister(0x2314, 4);
+  delay(50);
+  node.writeSingleRegister(0x2315, 1);
+  delay(50);
+
+  int32_t displacement = 125;  // 第1段位移
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+  delay(50);
+  node.clearTransmitBuffer();
+  node.writeSingleRegister(0x2321, 30);  //第1段目标速度
+  delay(50);
+  node.writeSingleRegister(0x2322, 10);  //第1段加速度
+  delay(50);
+  node.writeSingleRegister(0x2323, 0);  //第1段减速度
+  delay(50);
+  node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
+  delay(50);
+
+  displacement = 250;  // 第2段位移
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x2325, 2);
+  delay(50);
+  node.clearTransmitBuffer();
+  node.writeSingleRegister(0x2326, 30);
+  delay(50);
+  node.writeSingleRegister(0x2327, 0);
+  delay(50);
+  node.writeSingleRegister(0x2328, 0);
+  delay(50);
+  node.writeSingleRegister(0x2329, 0);
+  delay(50);
+
+  displacement = 125;  // 第3段位移
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x232A, 2);
+  delay(50);
+  node.clearTransmitBuffer();
+  node.writeSingleRegister(0x232B, 1);
+  delay(50);
+  node.writeSingleRegister(0x232C, 0);
+  delay(50);
+  node.writeSingleRegister(0x232D, 10);
+  delay(50);
+  node.writeSingleRegister(0x232E, 0);
+  delay(50);
+
+  displacement = 0;  // 第4段位移
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x232F, 2);
+  delay(50);
+  node.clearTransmitBuffer();
+  node.writeSingleRegister(0x2330, 0);
+  delay(50);
+  node.writeSingleRegister(0x2331, 0);
+  delay(50);
+  node.writeSingleRegister(0x2332, 1);
+  delay(50);
+  node.writeSingleRegister(0x2333, 1000);
+  delay(50);
+
+  node.writeSingleRegister(0x2300, 2);
   delay(50);
 }
 
@@ -835,6 +835,94 @@ void sendSensorData() {
 String getServoDataStr() {
   return "DATA:" + String(currentSpeed) + ":" + String(currentAcceleration);
 }
+
+//----------测试部分------------
+void debug() {
+  // 发送调试命令给伺服电机
+  sendServoCommand();
+  delay(50);  // 等待伺服电机响应
+  readServoResponse();
+  delay(1000);
+  stopServo();
+}
+
+/**
+ * 发送伺服电机调试命令
+ */
+void sendServoCommand() {
+
+  node.writeSingleRegister(0x2109, 2);  // 设置模式
+  delay(50);
+  node.writeSingleRegister(0x2380, 2);
+  delay(50);
+  node.writeSingleRegister(0x2385, 100);
+  delay(50);
+  node.writeSingleRegister(0x2390, 100);  // 设定目标速度
+  delay(50);
+  uint8_t result = node.writeSingleRegister(0x2384, 0);  // 设定加速度为 10 rps/s
+  delay(50);
+
+  if (result == node.ku8MBSuccess) {
+    Serial.println("Command sent successfully.");
+  } else {
+    Serial.print("Command failed with error code: ");
+    Serial.println(result);
+  }
+
+
+/**
+ * 读取伺服电机响应数据并输出到串口监视器
+ */
+void readServoResponse() {
+  if (Serial2.available()) {
+    Serial.println("receive servo response:");
+    while (Serial2.available()) {
+      char c = Serial2.read();
+      Serial.print(c);
+    }
+  }
+}
+
+
+void processWifiServer() {
+  if (!wifiClient || !wifiClient.connected()) {
+    wifiClient = wifiServer.available();
+    if (wifiClient) {
+        Serial.println("New WiFi client connected");
+    }
+  }
+
+  // 处理 WiFi 客户端数据
+  if (wifiClient && wifiClient.connected()) {
+    while (wifiClient.available()) {
+        String command = wifiClient.readStringUntil('\n');
+        command.trim();
+        handleCommand(command);
+    }
+  }
+}
+
+// 发送传感器数据
+void sendSensorData() {
+  String dataStr = getServoDataStr();
+  // 通过蓝牙发送
+  if (btConnected) {
+    SerialBT.print(dataStr);
+  }
+
+  // 通过WiFi发送
+  if (wifiClient && wifiClient.connected()) {
+    wifiClient.print(dataStr);
+  }
+
+  Serial.println("发送传感器数据: " + dataStr);
+}
+
+String getServoDataStr() {
+  return "DATA:" + String(currentSpeed) + ":" + String(currentAcceleration);
+}
+
+
 
 //----------测试部分------------
 void debug() {
