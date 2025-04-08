@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const { SerialPort } = require('serialport');
 const { ReadlineParser } = require('@serialport/parser-readline');
+const net = require('net');
 
 const app = express();
 const PORT = 8081;
@@ -12,6 +13,14 @@ const wss = new WebSocket.Server({ noServer: true });
 // 串口配置
 const SERIAL_PORT = 'COM5';
 const BAUD_RATE = 57600;
+
+// 通信状态
+const commState = {
+  preferredMode: 'bluetooth', // 优先使用蓝牙
+  currentMode: null,          // 当前实际使用的通信模式
+  isConnected: false,         // 当前连接状态
+  lastUpdate: null,           // 最后更新时间
+};
 
 // 系统状态
 const systemState = {
@@ -26,7 +35,25 @@ const systemState = {
   dataInterval: null
 };
 
-// 数据采集间隔(ms)
+// WiFi配置
+const WIFI_CONFIG = {
+  host: '192.168.4.1',
+  port: 8080,
+  reconnectInterval: 5000
+};
+
+const wifiState = {
+  socket: null,
+  isAvailable: false,
+  sensorData: {
+    speed: 0,
+    acceleration: 0,
+    lastUpdate: null
+  },
+  reconnectTimer: null,
+  dataInterval: null
+};
+
 const DATA_INTERVAL = 500;
 
 app.use(bodyParser.json());
