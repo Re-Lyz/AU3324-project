@@ -302,9 +302,11 @@ void setup() {
 // ------------------------ loop() 函数 ------------------------
 void loop() {
   switch (mode) {
-    case 1: mode1(); break;//180度 pid 转
-    case 2: mode2(); break;//平衡 mpu6050
-    case 3: mode3(); break;//前馈 多端位置
+
+    case 1: mode1(); break;  //180度 pid 转
+    case 2: mode2(); break;  //平衡 mpu6050
+    case 3: mode3(); break;  //前馈 多端位置
+
     default: break;
   }
 }
@@ -320,7 +322,8 @@ void initHardware() {
   // 初始化 OLED 显示屏
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     //Serial.println("OLED failed");
-    while (1);
+    while (1)
+      ;
   }
   display.clearDisplay();
   display.display();
@@ -379,22 +382,9 @@ void mode1() {
 
     start = !start;
     offset = millis();  //记录初始时间，用于计算当前时间的理论速度和加速度
-    Serial.print("初始时间：");
+
+    Serial.print("开始时间：");
     Serial.println(offset / 1000);
-
-    delay(20);
-    uint8_t result = node.readHoldingRegisters(0x6077, 2);
-    if (result == node.ku8MBSuccess) {
-      uint16_t highWord = node.getResponseBuffer(0);  // 高16位
-      uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
-
-      // 合并为一个32位数据（注意数据的符号问题）
-      int32_t data = ((int32_t)highWord << 16) | lowWord;
-      originAngle = data / 1000 * 360;  //记录初始角度，用于计算是否旋转了180°
-      // node.clearResponseBuffer();
-      Serial.print("初始角度：");
-      Serial.println(originAngle);
-    }
 
   }
 
@@ -404,30 +394,17 @@ void mode1() {
   processDisplay();
   processWireless();
 
-  // delay(20);
-  // uint8_t result = node.readHoldingRegisters(0x6077, 2);
-  // if (result == node.ku8MBSuccess) {
-  //   uint16_t highWord = node.getResponseBuffer(0);  // 高16位
-  //   uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
-
-  //   // 合并为一个32位数据（注意数据的符号问题）
-  //   int32_t data = ((int32_t)highWord << 16) | lowWord;
-  //   currentAngle = data / ONE_ROLL * 360;  //记录角度，用于计算是否旋转了180°
-  //   Serial.print("当前角度：");
-  //   Serial.println(currentAngle);
-  //   // node.clearResponseBuffer();
-  // }
 
 
-  // if (180 < currentAngle - originAngle) {
-  //   start = true;
-  //   useTrapezoidalProfile = !useTrapezoidalProfile;
-  //   stopServo();
+  if (6 < (millis() - offset) / 1000) {
+    start = !start;
+    useTrapezoidalProfile = !useTrapezoidalProfile;
+    stopServo();
+    delay(1000);
+    clearSpeedHistory();
+    //可以写一些后续的其他操作……
+  }
 
-  //   delay(5000);
-  //   clearSpeedHistory();
-  //   //可以写一些后续的其他操作……
-  // }
 }
 // 传感器模块：读取速度并计算PID调整值
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
@@ -574,9 +551,10 @@ void processMPU6050() {
 
 
 //-------MODE3 前馈模式------------
-void mode3(){
+void mode3() {
   //feedfoward
-    //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
+  //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
+
   node.writeSingleRegister(0x2109, 1);
   delay(50);
   node.writeSingleRegister(0x2310, 0);
@@ -783,7 +761,6 @@ void processWireless() {
   }
 }
 
-
 /**
  * 消费蓝牙消息
  */
@@ -836,91 +813,27 @@ String getServoDataStr() {
   return "DATA:" + String(currentSpeed) + ":" + String(currentAcceleration);
 }
 
-//----------测试部分------------
-void debug() {
-  // 发送调试命令给伺服电机
-  sendServoCommand();
-  delay(50);  // 等待伺服电机响应
-  readServoResponse();
-  delay(1000);
-  stopServo();
-}
-
-/**
- * 发送伺服电机调试命令
- */
-void sendServoCommand() {
-
-  node.writeSingleRegister(0x2109, 2);  // 设置模式
-  delay(50);
-  node.writeSingleRegister(0x2380, 2);
-  delay(50);
-  node.writeSingleRegister(0x2385, 100);
-  delay(50);
-  node.writeSingleRegister(0x2390, 100);  // 设定目标速度
-  delay(50);
-  uint8_t result = node.writeSingleRegister(0x2384, 0);  // 设定加速度为 10 rps/s
-  delay(50);
-
-  if (result == node.ku8MBSuccess) {
-    Serial.println("Command sent successfully.");
-  } else {
-    Serial.print("Command failed with error code: ");
-    Serial.println(result);
-  }
-
-
-/**
- * 读取伺服电机响应数据并输出到串口监视器
- */
-void readServoResponse() {
-  if (Serial2.available()) {
-    Serial.println("receive servo response:");
-    while (Serial2.available()) {
-      char c = Serial2.read();
-      Serial.print(c);
-    }
-  }
-}
-
-
 void processWifiServer() {
   if (!wifiClient || !wifiClient.connected()) {
     wifiClient = wifiServer.available();
     if (wifiClient) {
-        Serial.println("New WiFi client connected");
+      Serial.println("New WiFi client connected");
     }
   }
 
   // 处理 WiFi 客户端数据
   if (wifiClient && wifiClient.connected()) {
     while (wifiClient.available()) {
-        String command = wifiClient.readStringUntil('\n');
-        command.trim();
-        handleCommand(command);
+      String command = wifiClient.readStringUntil('\n');
+      command.trim();
+      handleCommand(command);
     }
   }
 }
 
-// 发送传感器数据
-void sendSensorData() {
-  String dataStr = getServoDataStr();
-  // 通过蓝牙发送
-  if (btConnected) {
-    SerialBT.print(dataStr);
-  }
 
-  // 通过WiFi发送
-  if (wifiClient && wifiClient.connected()) {
-    wifiClient.print(dataStr);
-  }
 
-  Serial.println("发送传感器数据: " + dataStr);
-}
 
-String getServoDataStr() {
-  return "DATA:" + String(currentSpeed) + ":" + String(currentAcceleration);
-}
 
 
 
