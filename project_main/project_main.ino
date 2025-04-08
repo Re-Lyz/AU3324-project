@@ -19,7 +19,7 @@
 #define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // RS485 通信波特率
-#define RS485_BAUD 115200
+#define RS485_BAUD 57600
 
 #define SSID "ESP32_AP"
 #define PASSWORD "12345678"
@@ -37,7 +37,7 @@ WiFiClient wifiClient;
 
 // 定义其他全局变量（例如伺服电机参数等）
 bool btConnected = false;  // 蓝牙连接状态标志
-//bool debugmode = false;
+bool debugmode = false;
 bool useTrapezoidalProfile = true;
 bool start = true;
 bool btPreviouslyConnected = false;
@@ -55,7 +55,10 @@ float maxSpeed = 0.0f;
 int historyIndex = 0;
 unsigned long reconnectAttemptTime = 0;
 
+float sensitivity;
 unsigned int offset = 0;
+
+int mode = 1;
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
 void processRS485Communication();
@@ -63,12 +66,17 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration);
 void processControl();
 void regulateControl(float modifiedSpeed, float modifiedAcceleration);
 void processDisplay();
-//void processWireless();
+void processWireless();
 void sendServoCommand();
 void readServoResponse();
 void handleCommand(String cmd);
 void stopServo();
-// void debug();
+void debug();
+void initTorqueMode();
+void processMPU6050();
+void mode1();
+void mode2();
+void mode3();
 
 // PID控制器类
 class PID {
@@ -250,111 +258,56 @@ public:
     }
   }
 };
-
-
-TrapezoidalProfile trapezoidal(1 / 3, 7 / 6, 1 / 3, 20, 10, 10);
-SCurveProfile sCurve(1 / 3, 0, 1 / 3, 10, 5 / 6);
+TrapezoidalProfile trapezoidal(0.5, 0.5, 0.5, 30, 10, 10);
+SCurveProfile sCurve(0.5, 0, 0.5, 10, 0.5);
 
 // ------------------------ setup() 函数 ------------------------
 void setup() {
   initHardware();
 
-  // uint8_t result = node.readHoldingRegisters(0x2035, 2);
-  // if (result == node.ku8MBSuccess) {
-  //   Serial.println("Read registers successfully:");
-  //   Serial.print("Register 0: ");
-  //   Serial.println(node.getResponseBuffer(0));
-  //   Serial.print("Register 1: ");
-  //   Serial.println(node.getResponseBuffer(1));
-  // } else {
-  //   Serial.print("Error reading registers, error code: ");
-  //   Serial.println(result);
-  // }
+  uint8_t result = node.readHoldingRegisters(0x2035, 2);
+  if (result == node.ku8MBSuccess) {
+    Serial.println("Read registers successfully:");
+    Serial.print("Register 0: ");
+    Serial.println(node.getResponseBuffer(0));
+    Serial.print("Register 1: ");
+    Serial.println(node.getResponseBuffer(1));
+    // node.clearResponseBuffer();
+  } else {
+    Serial.print("Error reading registers, error code: ");
+    Serial.println(result);
+  }
 
   //初始化参数
   start = true;
-  useTrapezoidalProfile = false;
-  // uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
-  // switch(ScaleGyroRange) {
-  //   case 0: sensitivity = 131.0; break;  // ±250°/s
-  //   case 1: sensitivity = 65.5; break;   // ±500°/s
-  //   case 2: sensitivity = 32.8; break;   // ±1000°/s
-  //   case 3: sensitivity = 16.4; break;   // ±2000°/s
-  //   default: sensitivity = 131.0; break;
-  // }
-  // Serial.print("灵敏度：");
-  // Serial.println(sensitivity);
 
+  uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
+  switch (ScaleGyroRange) {
+    case 0: sensitivity = 131.0; break;  // ±250°/s
+    case 1: sensitivity = 65.5; break;   // ±500°/s
+    case 2: sensitivity = 32.8; break;   // ±1000°/s
+    case 3: sensitivity = 16.4; break;   // ±2000°/s
+    default: sensitivity = 131.0; break;
+  }
+  Serial.print("灵敏度：");
+  Serial.println(sensitivity);
 
-  //t curve 和 s curve分开来搞
-  //是否测试电机
-  // if (debugmode) {
-  //   debug();
-  // }
+  // t curve 和 s curve分开来搞
+  // 是否测试电机
+  if (debugmode) {
+    debug();
+  }
 }
 
 // ------------------------ loop() 函数 ------------------------
 void loop() {
-
-  float modifiedSpeed = 0;
-  float modifiedAcceleration = 0;
-
-  if (start) {
-    processControl();
-    // PID控制器实例
-    pidSpeedT.init(2, 0.01, 0.02);         // 用于速度控制的PID 梯形曲线
-    pidAccelerationT.init(2, 0.01, 0.02);  // 用于加减速控制的PID
-    pidSpeedS.init(2, 0.01, 0.02);         // 用于速度控制的PID s曲线
-    pidAccelerationS.init(2, 0.01, 0.02);  // 用于加减速控制的PID
-
-    start = !start;
-    offset = millis();  //记录初始时间，用于计算当前时间的理论速度和加速度
-    Serial.print("初始时间：");
-    Serial.println(offset / 1000);
-
-    uint8_t result = node.readHoldingRegisters(0x6064, 2);
-    if (result == node.ku8MBSuccess) {
-      uint16_t highWord = node.getResponseBuffer(0);  // 高16位
-      uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
-
-      // 合并为一个32位数据（注意数据的符号问题）
-      int32_t data = ((int32_t)highWord << 16) | lowWord;
-      originAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
-    }
-    Serial.print("初始角度：");
-    Serial.println(originAngle);
-  }
-
-  processSensors(modifiedSpeed, modifiedAcceleration);
-  regulateControl(modifiedSpeed, modifiedAcceleration);
-
-  processDisplay();
-  processWireless();
-  processWifiServer();
-
-  uint8_t result = node.readHoldingRegisters(0x6064, 2);
-  if (result == node.ku8MBSuccess) {
-    uint16_t highWord = node.getResponseBuffer(0);  // 高16位
-    uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
-
-    // 合并为一个32位数据（注意数据的符号问题）
-    int32_t data = ((int32_t)highWord << 16) | lowWord;
-    currentAngle = data / ONE_ROLL * 360;  //记录初始角度，用于计算是否旋转了180°
-  }
-  Serial.print("当前角度：");
-  Serial.println(currentAngle);
-
-  if (180 < currentAngle - originAngle + 0.5) {
-    start = true;
-    useTrapezoidalProfile = !useTrapezoidalProfile;
-    stopServo();
-
-    delay(8000);
-    clearSpeedHistory();
-    //可以写一些后续的其他操作……
+  switch (mode) {
+    case 1: mode1(); break;//180度 pid 转
+    case 2: mode2(); break;//平衡 mpu6050
+    case 3: mode3(); break;//前馈 多端位置
+    default: break;
   }
 }
-
 
 // ------------------------ 模块函数实现 ------------------------
 // 硬件初始化模块
@@ -383,14 +336,14 @@ void initHardware() {
   Serial2.begin(RS485_BAUD, SERIAL_8N1, 17, 16);
   node.begin(01, Serial2);
   Serial.println("Modbus RTU initialization complete.");
-  // node.writeSingleRegister(0x2008, 1);//复位操作
+  node.writeSingleRegister(0x2008, 1);  //复位操作
+  delay(50);
+  node.writeSingleRegister(0x2010, 1);  //复位操作
+  delay(50);
+  // node.writeSingleRegister(0x200A, 1);  //恢复出厂设置
   // delay(50);
-  // node.writeSingleRegister(0x2010, 1);//复位操作
-  // delay(50);
-  // node.writeSingleRegister(0x200A, 1);//恢复出厂设置
-  // delay(50);
-  // node.writeSingleRegister(0x2101, 1);//位置清零
-  // delay(50);
+  // node.writeSingleRegister(0x2101, 1);  //位置清零
+  delay(1000);
 
   // 蓝牙初始化
   if (!SerialBT.begin("ESP32_Servo")) {  // 设备名称
@@ -402,7 +355,7 @@ void initHardware() {
   }
 
   // Wifi初始化
-  WiFi.softAP(SSID, PASSWORD, 1, 0, 4); // 信道1, 不隐藏SSID, 最大连接数4
+  WiFi.softAP(SSID, PASSWORD);
   Serial.println("热点已启动");
   Serial.print("SSID: ");
   Serial.println(SSID);
@@ -410,28 +363,95 @@ void initHardware() {
   Serial.println(WiFi.softAPIP());  // 默认IP通常是192.168.4.1
 }  // end of initHardware
 
+
+//-------MODE1 pid转180------------
+void mode1() {
+  float modifiedSpeed = 0;
+  float modifiedAcceleration = 0;
+
+  if (start) {
+    processControl();
+    // PID控制器实例
+    pidSpeedT.init(0, 0.00, 0.00);         // 用于速度控制的PID 梯形曲线
+    pidAccelerationT.init(0, 0.00, 0.00);  // 用于加减速控制的PID
+    pidSpeedS.init(2, 0.05, 0.02);         // 用于速度控制的PID s曲线
+    pidAccelerationS.init(2, 0.05, 0.01);  // 用于加减速控制的PID
+
+    start = !start;
+    offset = millis();  //记录初始时间，用于计算当前时间的理论速度和加速度
+    Serial.print("初始时间：");
+    Serial.println(offset / 1000);
+
+    delay(20);
+    uint8_t result = node.readHoldingRegisters(0x6077, 2);
+    if (result == node.ku8MBSuccess) {
+      uint16_t highWord = node.getResponseBuffer(0);  // 高16位
+      uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
+
+      // 合并为一个32位数据（注意数据的符号问题）
+      int32_t data = ((int32_t)highWord << 16) | lowWord;
+      originAngle = data / 1000 * 360;  //记录初始角度，用于计算是否旋转了180°
+      // node.clearResponseBuffer();
+      Serial.print("初始角度：");
+      Serial.println(originAngle);
+    }
+
+  }
+
+  processSensors(modifiedSpeed, modifiedAcceleration);
+  regulateControl(modifiedSpeed, modifiedAcceleration);
+
+  processDisplay();
+  processWireless();
+
+  // delay(20);
+  // uint8_t result = node.readHoldingRegisters(0x6077, 2);
+  // if (result == node.ku8MBSuccess) {
+  //   uint16_t highWord = node.getResponseBuffer(0);  // 高16位
+  //   uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
+
+  //   // 合并为一个32位数据（注意数据的符号问题）
+  //   int32_t data = ((int32_t)highWord << 16) | lowWord;
+  //   currentAngle = data / ONE_ROLL * 360;  //记录角度，用于计算是否旋转了180°
+  //   Serial.print("当前角度：");
+  //   Serial.println(currentAngle);
+  //   // node.clearResponseBuffer();
+  // }
+
+
+  // if (180 < currentAngle - originAngle) {
+  //   start = true;
+  //   useTrapezoidalProfile = !useTrapezoidalProfile;
+  //   stopServo();
+
+  //   delay(5000);
+  //   clearSpeedHistory();
+  //   //可以写一些后续的其他操作……
+  // }
+}
 // 传感器模块：读取速度并计算PID调整值
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
-  // int16_t ax, ay, az, gx, gy, gz;
-  // mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-  // uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
-  // uint8_t ScaleAccelRange = mpu.getFullScaleAccelRange();
   float targetSpeed, targetAcceleration;
 
+  delay(20);
   uint8_t result = node.readHoldingRegisters(0x606C, 2);
   if (result == node.ku8MBSuccess) {
     uint16_t highWord = node.getResponseBuffer(0);  // 高16位
     uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
     int32_t data = ((int32_t)highWord << 16) | lowWord;
+    Serial.print("data:");
+    Serial.println(data);
     currentSpeed = data;
+    //node.clearResponseBuffer();
   }
-  delay(10);
+  delay(20);
   result = node.readHoldingRegisters(0x606C, 2);
   if (result == node.ku8MBSuccess) {
     uint16_t highWord = node.getResponseBuffer(0);  // 高16位
     uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
     int32_t data = ((int32_t)highWord << 16) | lowWord;
-    currentAcceleration = (data - currentSpeed) * 10000 / (60 * 50);
+    currentAcceleration = (data - currentSpeed) * 5000 / (60 * 50);
+    //node.clearResponseBuffer();
   }
   float currentTime = (millis() - offset) / 1000.0;  // 当前时间（秒）
 
@@ -441,105 +461,29 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   } else {
     sCurve.updateProfile(currentTime, targetSpeed, targetAcceleration);
   }
-  // if (int(currentTime * 10) % 5 == 0) {
-  //   Serial.print("currentTime:");
-  //   Serial.println(currentTime);
-  //   Serial.print("currentSpeed:");
-  //   Serial.println(currentSpeed);
-  //   Serial.print("currentAcceleration:");
-  //   Serial.println(currentAcceleration);
-  //   Serial.print("Target Speed: ");
-  //   Serial.println(targetSpeed);
-  //   Serial.print("Target Acceleration: ");
-  //   Serial.println(targetAcceleration);
-  // }
-
-  // 使用PID计算修正值
-  if(useTrapezoidalProfile){
-    modifiedSpeed = pidSpeedT.compute(targetSpeed, currentSpeed);
-    modifiedAcceleration = pidAccelerationT.compute(targetAcceleration, currentAcceleration);
-  }else{
-    modifiedSpeed = pidSpeedS.compute(targetSpeed, currentSpeed);
-    modifiedAcceleration = pidAccelerationS.compute(targetAcceleration, currentAcceleration);  
+  if (true) {
+    // Serial.print("currentTime:");
+    // Serial.println(currentTime);
+    Serial.print("currentSpeed:");
+    Serial.println(currentSpeed);
+    Serial.print("currentAcceleration:");
+    Serial.println(currentAcceleration);
+    Serial.print("Target Speed: ");
+    Serial.println(targetSpeed);
+    Serial.print("Target Acceleration: ");
+    Serial.println(targetAcceleration);
   }
 
+  // 使用PID计算修正值
+  if (useTrapezoidalProfile) {
+    modifiedSpeed = pidSpeedT.compute(targetSpeed, currentSpeed);
+    modifiedAcceleration = pidAccelerationT.compute(targetAcceleration, currentAcceleration);
+  } else {
+    modifiedSpeed = pidSpeedS.compute(targetSpeed, currentSpeed);
+    modifiedAcceleration = pidAccelerationS.compute(targetAcceleration, currentAcceleration);
+  }
 }
-
 void processControl() {
-    //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
-    // node.writeSingleRegister(0x2109, 1);
-    // delay(50);
-    // node.writeSingleRegister(0x2310, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2311, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2314, 4);
-    // delay(50);
-    // node.writeSingleRegister(0x2315, 1);
-    // delay(50);
-
-    // int32_t displacement = 60;  // 第1段位移
-    // node.setTransmitBuffer(1, lowWord(displacement));
-    // node.setTransmitBuffer(0, highWord(displacement));
-    // node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
-    // delay(50);
-    // node.clearTransmitBuffer();
-    // node.writeSingleRegister(0x2321, 20);  //第1段目标速度
-    // delay(50);
-    // node.writeSingleRegister(0x2322, 10);  //第1段加速度
-    // delay(50);
-    // node.writeSingleRegister(0x2323, 0);  //第1段减速度
-    // delay(50);
-    // node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
-    // delay(50);
-
-    // displacement = 390;  // 第2段位移
-    // node.setTransmitBuffer(1, lowWord(displacement));
-    // node.setTransmitBuffer(0, highWord(displacement));
-    // node.writeMultipleRegisters(0x2325, 2);
-    // delay(50);
-    // node.clearTransmitBuffer();
-    // node.writeSingleRegister(0x2326, 20);
-    // delay(50);
-    // node.writeSingleRegister(0x2327, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2328, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2329, 0);
-    // delay(50);
-
-    // displacement = 50;  // 第3段位移
-    // node.setTransmitBuffer(1, lowWord(displacement));
-    // node.setTransmitBuffer(0, highWord(displacement));
-    // node.writeMultipleRegisters(0x232A, 2);
-    // delay(50);
-    // node.clearTransmitBuffer();
-    // node.writeSingleRegister(0x232B, 1);
-    // delay(50);
-    // node.writeSingleRegister(0x232C, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x232D, 10);
-    // delay(50);
-    // node.writeSingleRegister(0x232E, 0);
-    // delay(50);
-
-    // displacement = 0;  // 第4段位移
-    // node.setTransmitBuffer(1, lowWord(displacement));
-    // node.setTransmitBuffer(0, highWord(displacement));
-    // node.writeMultipleRegisters(0x232F, 2);
-    // delay(50);
-    // node.clearTransmitBuffer();
-    // node.writeSingleRegister(0x2330, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2331, 0);
-    // delay(50);
-    // node.writeSingleRegister(0x2332, 1);
-    // delay(50);
-    // node.writeSingleRegister(0x2333, 1000);
-    // delay(50);
-
-    // node.writeSingleRegister(0x2300, 2);
-    // delay(50);
   node.writeSingleRegister(0x2109, 2);
   delay(50);
   node.writeSingleRegister(0x2380, 1);
@@ -548,21 +492,20 @@ void processControl() {
   delay(50);
   node.writeSingleRegister(0x2385, 10);
   delay(50);
-  node.writeSingleRegister(0x2390, 20);  //第一段
+  node.writeSingleRegister(0x2390, 30);  //第一段
   delay(50);
-  node.writeSingleRegister(0x2391, 16);
+  node.writeSingleRegister(0x2391, 10);
   delay(50);
   node.writeSingleRegister(0x2300, 2);
   delay(50);
-
 }
-
 // 控制模块：根据传入的修改后的速度和加速度设置Modbus寄存器
 void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
   modifiedAcceleration += currentAcceleration;
-  modifiedSpeed += currentSpeed;
+  //modifiedSpeed += currentSpeed;
   node.writeSingleRegister(0x2385, modifiedAcceleration);
-  node.writeSingleRegister(0x2390, modifiedSpeed);
+  //delay(20);
+  //node.writeSingleRegister(0x2390, modifiedSpeed);
 
   // 打印输出
   // Serial.print("Modified Speed: ");
@@ -570,9 +513,142 @@ void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
   // Serial.print("Modified Acceleration: ");
   // Serial.println(modifiedAcceleration);
 }
-
 void stopServo() {
   node.writeSingleRegister(0x2300, 1);
+  delay(50);
+}
+
+
+//----------MODE2 保持平衡---------------
+void mode2() {
+  if (start) {
+    initTorqueMode();
+    start = !start;
+  }
+  processMPU6050();
+}
+void initTorqueMode() {
+  node.writeSingleRegister(0x2109, 2);
+  delay(50);
+  node.writeSingleRegister(0x23F1, 100);
+  delay(50);
+  node.writeSingleRegister(0x23F2, 50);
+  delay(50);
+  node.writeSingleRegister(0x23F3, 0);
+  delay(50);
+  node.writeSingleRegister(0x2300, 2);
+  delay(50);
+}
+void processMPU6050() {
+  int16_t ax, ay, az, gx, gy, gz;
+  // 读取 MPU6050 的加速度、陀螺仪数据
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  // 根据加速度数据计算倾斜角（以 pitch 为例）
+  // 采用 arctan2(accelX, accelZ) 计算倾角，单位转换为度
+  float pitch = atan2((float)ax, (float)az) * 180.0 / PI;
+
+  // 设定期望的水平角度为 0°
+  float error = pitch;  // 如果当前角度偏离0，则 error 为正或负
+
+  // 采用简单比例控制计算目标转矩（单位为百分比，注意转矩单位为 0.1%，例如 100 表示 10%）
+  float Kp = 1.0;                    // 比例增益，实际值需调节
+  float torquePercent = Kp * error;  // 假设1°偏差对应1%的转矩调整
+
+  // 为了与寄存器单位匹配，将转矩百分比除以 0.1得到整数值
+  int16_t torqueReg = (int16_t)(torquePercent / 0.1);
+
+  // 将计算的目标转矩写入目标转矩寄存器（假设 0x23F3 为目标转矩，单位为 0.1%）
+  uint8_t result = node.writeSingleRegister(0x23F3, (uint16_t)torqueReg);
+  delay(50);
+
+  // 调试输出
+  Serial.print("MPU6050 Pitch: ");
+  Serial.print(pitch);
+  Serial.print(" deg, Error: ");
+  Serial.print(error);
+  Serial.print(" deg, Torque Command: ");
+  Serial.print(torqueReg);
+  Serial.println(" (0.1%)");
+}
+
+
+//-------MODE3 前馈模式------------
+void mode3(){
+  //feedfoward
+    //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
+  node.writeSingleRegister(0x2109, 1);
+  delay(50);
+  node.writeSingleRegister(0x2310, 0);
+  delay(50);
+  node.writeSingleRegister(0x2311, 0);
+  delay(50);
+  node.writeSingleRegister(0x2314, 4);
+  delay(50);
+  node.writeSingleRegister(0x2315, 1);
+  delay(50);
+
+  int32_t displacement = 125;  // 第1段位移
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+  delay(50);
+  node.clearTransmitBuffer();
+  node.writeSingleRegister(0x2321, 30);  //第1段目标速度
+  delay(50);
+  node.writeSingleRegister(0x2322, 10);  //第1段加速度
+  delay(50);
+  node.writeSingleRegister(0x2323, 0);  //第1段减速度
+  delay(50);
+  node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
+  delay(50);
+
+  displacement = 250;  // 第2段位移
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x2325, 2);
+  delay(50);
+  node.clearTransmitBuffer();
+  node.writeSingleRegister(0x2326, 30);
+  delay(50);
+  node.writeSingleRegister(0x2327, 0);
+  delay(50);
+  node.writeSingleRegister(0x2328, 0);
+  delay(50);
+  node.writeSingleRegister(0x2329, 0);
+  delay(50);
+
+  displacement = 125;  // 第3段位移
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x232A, 2);
+  delay(50);
+  node.clearTransmitBuffer();
+  node.writeSingleRegister(0x232B, 1);
+  delay(50);
+  node.writeSingleRegister(0x232C, 0);
+  delay(50);
+  node.writeSingleRegister(0x232D, 10);
+  delay(50);
+  node.writeSingleRegister(0x232E, 0);
+  delay(50);
+
+  displacement = 0;  // 第4段位移
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x232F, 2);
+  delay(50);
+  node.clearTransmitBuffer();
+  node.writeSingleRegister(0x2330, 0);
+  delay(50);
+  node.writeSingleRegister(0x2331, 0);
+  delay(50);
+  node.writeSingleRegister(0x2332, 1);
+  delay(50);
+  node.writeSingleRegister(0x2333, 1000);
+  delay(50);
+
+  node.writeSingleRegister(0x2300, 2);
   delay(50);
 }
 
@@ -688,8 +764,8 @@ void processWireless() {
   while (SerialBT.available()) {
     String command = SerialBT.readStringUntil('\n');
     command.trim();
-    Serial.print("蓝牙消息：");
-    Serial.println(command);
+    //Serial.print("蓝牙消息：");
+    //Serial.println(command);
     handleCommand(command);
   }
 
@@ -714,11 +790,10 @@ void processWireless() {
 void handleCommand(String cmd) {
   if (cmd == "ROTATE") {
     // TODO：实现电机旋转180度
-    mode1();
   } else if (cmd == "GET_DATA") {
     String dataStr = getServoDataStr();
     SerialBT.print(dataStr);
-    Serial.println("Sent sensor data: " + dataStr);
+    //Serial.println("Sent sensor data: " + dataStr);
   } else {
     Serial.print("==========> 蓝牙命令不存在：");
     Serial.println(cmd);
@@ -737,6 +812,73 @@ void handleCommand(String cmd) {
       Serial.print("WiFi消息：");
       Serial.println(command);
       handleCommand(command);
+    }
+  }
+}
+
+// 发送传感器数据
+void sendSensorData() {
+  String dataStr = getServoDataStr();
+  // 通过蓝牙发送
+  if (btConnected) {
+    SerialBT.print(dataStr);
+  }
+
+  // 通过WiFi发送
+  if (wifiClient && wifiClient.connected()) {
+    wifiClient.print(dataStr);
+  }
+
+  Serial.println("发送传感器数据: " + dataStr);
+}
+
+String getServoDataStr() {
+  return "DATA:" + String(currentSpeed) + ":" + String(currentAcceleration);
+}
+
+//----------测试部分------------
+void debug() {
+  // 发送调试命令给伺服电机
+  sendServoCommand();
+  delay(50);  // 等待伺服电机响应
+  readServoResponse();
+  delay(1000);
+  stopServo();
+}
+
+/**
+ * 发送伺服电机调试命令
+ */
+void sendServoCommand() {
+
+  node.writeSingleRegister(0x2109, 2);  // 设置模式
+  delay(50);
+  node.writeSingleRegister(0x2380, 2);
+  delay(50);
+  node.writeSingleRegister(0x2385, 100);
+  delay(50);
+  node.writeSingleRegister(0x2390, 100);  // 设定目标速度
+  delay(50);
+  uint8_t result = node.writeSingleRegister(0x2384, 0);  // 设定加速度为 10 rps/s
+  delay(50);
+
+  if (result == node.ku8MBSuccess) {
+    Serial.println("Command sent successfully.");
+  } else {
+    Serial.print("Command failed with error code: ");
+    Serial.println(result);
+  }
+
+
+/**
+ * 读取伺服电机响应数据并输出到串口监视器
+ */
+void readServoResponse() {
+  if (Serial2.available()) {
+    Serial.println("receive servo response:");
+    while (Serial2.available()) {
+      char c = Serial2.read();
+      Serial.print(c);
     }
   }
 }
@@ -783,52 +925,52 @@ String getServoDataStr() {
 
 
 //----------测试部分------------
-// void debug() {
-//   // 发送调试命令给伺服电机
-//   sendServoCommand();
-//   delay(50);  // 等待伺服电机响应
-//   readServoResponse();
-//   delay(1000);
-//   stopServo();
-// }
+void debug() {
+  // 发送调试命令给伺服电机
+  sendServoCommand();
+  delay(50);  // 等待伺服电机响应
+  readServoResponse();
+  delay(1000);
+  stopServo();
+}
 
-// /**
-//  * 发送伺服电机调试命令
-//  */
-// void sendServoCommand() {
+/**
+ * 发送伺服电机调试命令
+ */
+void sendServoCommand() {
 
-//   node.writeSingleRegister(0x2109, 2);  // 设置模式
-//   delay(50);
-//   node.writeSingleRegister(0x2380, 2);
-//   delay(50);
-//   node.writeSingleRegister(0x2385, 100);
-//   delay(50);
-//   node.writeSingleRegister(0x2390, 100);  // 设定目标速度
-//   delay(50);
-//   uint8_t result = node.writeSingleRegister(0x2384, 0);  // 设定加速度为 10 rps/s
-//   delay(50);
+  node.writeSingleRegister(0x2109, 2);  // 设置模式
+  delay(50);
+  node.writeSingleRegister(0x2380, 2);
+  delay(50);
+  node.writeSingleRegister(0x2385, 100);
+  delay(50);
+  node.writeSingleRegister(0x2390, 100);  // 设定目标速度
+  delay(50);
+  uint8_t result = node.writeSingleRegister(0x2384, 0);  // 设定加速度为 10 rps/s
+  delay(50);
 
-//   if (result == node.ku8MBSuccess) {
-//     Serial.println("Command sent successfully.");
-//   } else {
-//     Serial.print("Command failed with error code: ");
-//     Serial.println(result);
-//   }
-// }
+  if (result == node.ku8MBSuccess) {
+    Serial.println("Command sent successfully.");
+  } else {
+    Serial.print("Command failed with error code: ");
+    Serial.println(result);
+  }
+}
 
 
-// /**
-//  * 读取伺服电机响应数据并输出到串口监视器
-//  */
-// void readServoResponse() {
-//   if (Serial2.available()) {
-//     Serial.println("receive servo response:");
-//     while (Serial2.available()) {
-//       char c = Serial2.read();
-//       Serial.print(c);
-//     }
-//     Serial.println();
-//   } else {
-//     Serial.println("no response");
-//   }
-// }
+/**
+ * 读取伺服电机响应数据并输出到串口监视器
+ */
+void readServoResponse() {
+  if (Serial2.available()) {
+    Serial.println("receive servo response:");
+    while (Serial2.available()) {
+      char c = Serial2.read();
+      Serial.print(c);
+    }
+    Serial.println();
+  } else {
+    Serial.println("no response");
+  }
+}
