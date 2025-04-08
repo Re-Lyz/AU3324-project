@@ -12,7 +12,7 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue';
+import { ref, watch } from 'vue';
 import { use } from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 import { LineChart } from 'echarts/charts';
@@ -35,8 +35,8 @@ export default {
   components: { VChart },
   props: {
     angleData: {
-      type: Array,
-      default: () => []
+      type: Object,
+      default: () => ({ speed: 0, acceleration: 0, timestamp: null })
     }
   },
   
@@ -171,6 +171,8 @@ export default {
       const now = new Date();
       const time = `${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
       
+      console.log("========== Update Chart ==========")
+
       // Update speed chart
       if (speedChartOption.value.xAxis.data.length > 50) {
         speedChartOption.value.xAxis.data.shift();
@@ -188,10 +190,16 @@ export default {
       accelerationChartOption.value.series[0].data.push(acceleration);
     };
 
+    // 监听 angleData 变化
+    watch(() => props.angleData, (newData) => {
+      if (newData && newData.speed !== undefined && newData.acceleration !== undefined) {
+        updateChart(newData.speed, newData.acceleration);
+      }
+    }, { deep: true, immediate: true });
+
     return {
       speedChartOption,
-      accelerationChartOption,
-      updateChart
+      accelerationChartOption
     };
   }
 };
@@ -200,7 +208,7 @@ export default {
 <style scoped>
 .angle-chart-container {
   width: 100%;
-  height: 600px; /* Increased height to accommodate two charts */
+  height: 600px;
 }
 
 .chart-group {
