@@ -713,6 +713,7 @@ void processWireless() {
 void handleCommand(String cmd) {
   if (cmd == "ROTATE") {
     // TODO：实现电机旋转180度
+    mode1();
   } else if (cmd == "GET_DATA") {
     String dataStr = getServoDataStr();
     SerialBT.print(dataStr);
