@@ -382,6 +382,7 @@ void mode1() {
     offset = millis();  //记录初始时间，用于计算当前时间的理论速度和加速度
     Serial.print("开始时间：");
     Serial.println(offset / 1000);
+
   }
 
   processSensors(modifiedSpeed, modifiedAcceleration);
@@ -389,6 +390,7 @@ void mode1() {
 
   processDisplay();
   processWireless();
+
 
 
   if (6 < (millis() - offset) / 1000) {
@@ -399,6 +401,7 @@ void mode1() {
     clearSpeedHistory();
     //可以写一些后续的其他操作……
   }
+
 }
 // 传感器模块：读取速度并计算PID调整值
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
@@ -564,6 +567,8 @@ void processMPU6050(float &origin) {
 void mode3() {
   //feedfoward
   //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
+
+
   node.writeSingleRegister(0x2109, 1);
   delay(50);
   node.writeSingleRegister(0x2310, 0);
