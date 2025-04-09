@@ -58,7 +58,7 @@ unsigned long reconnectAttemptTime = 0;
 float sensitivity;
 unsigned int offset = 0;
 
-int mode = 1;
+int mode = 2;
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
 void processRS485Communication();
@@ -73,7 +73,7 @@ void handleCommand(String cmd);
 void stopServo();
 void debug();
 void initTorqueMode();
-void processMPU6050();
+void processMPU6050(float &origin);
 void mode1();
 void mode2();
 void mode3();
@@ -373,10 +373,10 @@ void mode1() {
   if (start) {
     processControl();
     // PID控制器实例
-    pidSpeedT.init(0, 0.00, 0.00);         // 用于速度控制的PID 梯形曲线
-    pidAccelerationT.init(0, 0.00, 0.00);  // 用于加减速控制的PID
-    pidSpeedS.init(2, 0.05, 0.02);         // 用于速度控制的PID s曲线
-    pidAccelerationS.init(2, 0.05, 0.01);  // 用于加减速控制的PID
+    //pidSpeedT.init(0, 0.00, 0.00);         // 用于速度控制的PID 梯形曲线
+    pidAccelerationT.init(2, 0.02, 0.01);  // 用于加减速控制的PID
+    //pidSpeedS.init(2, 0.02, 0.01);         // 用于速度控制的PID s曲线
+    pidAccelerationS.init(2, 0.02, 0.01);  // 用于加减速控制的PID
 
     start = !start;
     offset = millis();  //记录初始时间，用于计算当前时间的理论速度和加速度
@@ -489,58 +489,74 @@ void stopServo() {
   delay(50);
 }
 
-
+float origin = 0;
 //----------MODE2 保持平衡---------------
 void mode2() {
   if (start) {
     initTorqueMode();
     start = !start;
+
+    int16_t ax, ay, az, gx, gy, gz;
+    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    origin = atan2((float)ax, (float)az) * 180.0 / PI;  
   }
-  processMPU6050();
+  processMPU6050(origin);
 }
 void initTorqueMode() {
-  node.writeSingleRegister(0x2109, 2);
+  node.writeSingleRegister(0x2109, 1);
   delay(50);
-  node.writeSingleRegister(0x23F1, 100);
+  node.writeSingleRegister(0x2310, 3);
   delay(50);
-  node.writeSingleRegister(0x23F2, 50);
+  node.writeSingleRegister(0x2311, 0);
   delay(50);
-  node.writeSingleRegister(0x23F3, 0);
+  int32_t displacement = 0;  
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+  delay(50);
+  node.writeSingleRegister(0x2321, 30);
+  delay(50);
+  node.writeSingleRegister(0x2322, 10);
+  delay(50);
+  node.writeSingleRegister(0x2323, 10);
+  delay(50);
+  node.writeSingleRegister(0x2316, 0);
+  delay(50);
+  node.writeSingleRegister(0x2316, 1);
   delay(50);
   node.writeSingleRegister(0x2300, 2);
-  delay(50);
+  delay(1000);
+
 }
-void processMPU6050() {
+void processMPU6050(float &origin) {
   int16_t ax, ay, az, gx, gy, gz;
-  // 读取 MPU6050 的加速度、陀螺仪数据
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
-  // 根据加速度数据计算倾斜角（以 pitch 为例）
   // 采用 arctan2(accelX, accelZ) 计算倾角，单位转换为度
   float pitch = atan2((float)ax, (float)az) * 180.0 / PI;
+  int error = pitch - origin;  // 误差（单位：°） 
+  origin = pitch; 
+  float pulsesPerDegree = ONE_ROLL / 360.0; 
 
-  // 设定期望的水平角度为 0°
-  float error = pitch;  // 如果当前角度偏离0，则 error 为正或负
-
-  // 采用简单比例控制计算目标转矩（单位为百分比，注意转矩单位为 0.1%，例如 100 表示 10%）
-  float Kp = 1.0;                    // 比例增益，实际值需调节
-  float torquePercent = Kp * error;  // 假设1°偏差对应1%的转矩调整
-
-  // 为了与寄存器单位匹配，将转矩百分比除以 0.1得到整数值
-  int16_t torqueReg = (int16_t)(torquePercent / 0.1);
-
-  // 将计算的目标转矩写入目标转矩寄存器（假设 0x23F3 为目标转矩，单位为 0.1%）
-  uint8_t result = node.writeSingleRegister(0x23F3, (uint16_t)torqueReg);
+  float targetPositionPulFloat = error * pulsesPerDegree;
+  int32_t posCmdPul = (int32_t)(targetPositionPulFloat);
+  node.setTransmitBuffer(1, lowWord(posCmdPul));
+  node.setTransmitBuffer(0, highWord(posCmdPul));
+  node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
   delay(50);
+  node.writeSingleRegister(0x2316, 0);
+  delay(50);
+  node.writeSingleRegister(0x2316, 1);
+  delay(100);
 
   // 调试输出
   Serial.print("MPU6050 Pitch: ");
   Serial.print(pitch);
-  Serial.print(" deg, Error: ");
+  Serial.print(" °, Error: ");
   Serial.print(error);
-  Serial.print(" deg, Torque Command: ");
-  Serial.print(torqueReg);
-  Serial.println(" (0.1%)");
+  Serial.print(" °, Pos Command: ");
+  Serial.print(posCmdPul);
+  Serial.println("pul");
 }
 
 
@@ -574,7 +590,7 @@ void mode3() {
   node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
   delay(50);
 
-  displacement = 250;  // 第2段位移
+  displacement = 375;  // 第2段位移
   node.setTransmitBuffer(1, lowWord(displacement));
   node.setTransmitBuffer(0, highWord(displacement));
   node.writeMultipleRegisters(0x2325, 2);
@@ -589,7 +605,7 @@ void mode3() {
   node.writeSingleRegister(0x2329, 0);
   delay(50);
 
-  displacement = 125;  // 第3段位移
+  displacement = 0;  // 第3段位移
   node.setTransmitBuffer(1, lowWord(displacement));
   node.setTransmitBuffer(0, highWord(displacement));
   node.writeMultipleRegisters(0x232A, 2);
