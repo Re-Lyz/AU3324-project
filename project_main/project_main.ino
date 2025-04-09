@@ -39,7 +39,8 @@ WiFiClient wifiClient;
 bool btConnected = false;  // 蓝牙连接状态标志
 bool debugmode = false;
 bool useTrapezoidalProfile = true;
-bool start = true;
+bool start1 = true;
+bool start2 = true;
 bool btPreviouslyConnected = false;
 
 float originAngle;
@@ -58,7 +59,7 @@ unsigned long reconnectAttemptTime = 0;
 float sensitivity;
 unsigned int offset = 0;
 
-int mode = 2;
+int mode = 3;//伺服电机运行模式
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
 void processRS485Communication();
@@ -279,7 +280,8 @@ void setup() {
   }
 
   //初始化参数
-  start = true;
+  start1 = true;
+  start2 = true;
 
   uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
   switch (ScaleGyroRange) {
@@ -370,15 +372,15 @@ void mode1() {
   float modifiedSpeed = 0;
   float modifiedAcceleration = 0;
 
-  if (start) {
+  if (start1) {
     processControl();
     // PID控制器实例
-    //pidSpeedT.init(0, 0.00, 0.00);         // 用于速度控制的PID 梯形曲线
-    pidAccelerationT.init(2, 0.02, 0.01);  // 用于加减速控制的PID
-    //pidSpeedS.init(2, 0.02, 0.01);         // 用于速度控制的PID s曲线
-    pidAccelerationS.init(2, 0.02, 0.01);  // 用于加减速控制的PID
+    pidSpeedT.init(1, 0.00, 0.00);         // 用于速度控制的PID 梯形曲线
+    pidAccelerationT.init(3.5, 0.05, 0.01);  // 用于加减速控制的PID
+    pidSpeedS.init(1, 0.00, 0.00);         // 用于速度控制的PID s曲线
+    pidAccelerationS.init(1.0, 0.01, 0.05);  // 用于加减速控制的PID
 
-    start = !start;
+    start1 = !start1;
     offset = millis();  //记录初始时间，用于计算当前时间的理论速度和加速度
     Serial.print("开始时间：");
     Serial.println(offset / 1000);
@@ -391,10 +393,8 @@ void mode1() {
   processDisplay();
   processWireless();
 
-
-
-  if (6 < (millis() - offset) / 1000) {
-    start = !start;
+  if (5 < (millis() - offset) / 1000) {
+    start1 = !start1;
     useTrapezoidalProfile = !useTrapezoidalProfile;
     stopServo();
     delay(1000);
@@ -413,8 +413,8 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
     uint16_t highWord = node.getResponseBuffer(0);  // 高16位
     uint16_t lowWord = node.getResponseBuffer(1);   // 低16位
     int32_t data = ((int32_t)highWord << 16) | lowWord;
-    Serial.print("data:");
-    Serial.println(data);
+    // Serial.print("data:");
+    // Serial.println(data);
     currentSpeed = data;
     //node.clearResponseBuffer();
   }
@@ -438,14 +438,14 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   if (true) {
     // Serial.print("currentTime:");
     // Serial.println(currentTime);
-    Serial.print("currentSpeed:");
-    Serial.println(currentSpeed);
-    Serial.print("currentAcceleration:");
-    Serial.println(currentAcceleration);
-    Serial.print("Target Speed: ");
-    Serial.println(targetSpeed);
-    Serial.print("Target Acceleration: ");
-    Serial.println(targetAcceleration);
+    // Serial.print("currentSpeed:");
+    // Serial.println(currentSpeed);
+    // Serial.print("currentAcceleration:");
+    // Serial.println(currentAcceleration);
+    // Serial.print("Target Speed: ");
+    // Serial.println(targetSpeed);
+    // Serial.print("Target Acceleration: ");
+    // Serial.println(targetAcceleration);
   }
 
   // 使用PID计算修正值
@@ -495,9 +495,9 @@ void stopServo() {
 float origin = 0;
 //----------MODE2 保持平衡---------------
 void mode2() {
-  if (start) {
+  if (start2) {
     initTorqueMode();
-    start = !start;
+    start2 = !start2;
 
     int16_t ax, ay, az, gx, gy, gz;
     mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
@@ -780,7 +780,8 @@ void processWireless() {
  */
 void handleCommand(String cmd) {
   if (cmd == "ROTATE") {
-    // TODO：实现电机旋转180度
+    Serial.print("Received!");
+    mode = 2;
   } else if (cmd == "GET_DATA") {
     String dataStr = getServoDataStr();
     SerialBT.print(dataStr);
