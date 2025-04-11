@@ -428,26 +428,14 @@ app.post('/api/rotate', (req, res) => {
     const command = 'ROTATE\n';
     systemState.port.write(command, (err) => {
       if (err) {
+        console.log(err);
         updateConnectionStatus(false);
         return tryWifiFallback(res);
       }
+      console.log("==========> Send Message: ROTATE")
       res.status(200).json({ 
         message: 'Rotation command sent via Bluetooth',
         mode: 'bluetooth'
-      });
-    });
-  } else if (wifiState.isAvailable) {
-    // 通过WiFi发送
-    wifiState.socket.write('ROTATE\n', (err) => {
-      if (err) {
-        handleWifiDisconnect();
-        return res.status(500).json({ 
-          message: 'Failed to send command via WiFi' 
-        });
-      }
-      res.status(200).json({ 
-        message: 'Rotation command sent via WiFi',
-        mode: 'wifi'
       });
     });
   } else {
