@@ -60,7 +60,7 @@ unsigned long reconnectAttemptTime = 0;
 float sensitivity;
 unsigned int offset = 0;
 
-int mode = 4;  //伺服电机运行模式
+int mode = 2;  //伺服电机运行模式
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
 void processRS485Communication();
@@ -127,6 +127,7 @@ PID pidSpeedS;         // 用于速度控制的PID s曲线
 PID pidAccelerationS;  // 用于加减速控制的PID
 
 PID pidPosmode2;
+PID pidSpeedmode2;
 
 class TrapezoidalProfile {
 private:
@@ -339,10 +340,13 @@ void setup() {
 
 // ------------------------ loop() 函数 ------------------------
 void loop() {
+  currentSpeed = getSpeed();
+  processDisplay();
+  processWireless();
   switch (mode) {
     case 1: mode1(); break;  //180度 pid 转
     case 2: mode2(); break;  //平衡 mpu6050
-    case 3: mode3(); break;  //前馈 多端位置
+    case 3: mode3(); break;  //多端位置
     case 4: debug(); break;
     default: break;
   }
@@ -427,8 +431,6 @@ void mode1() {
   processSensors(modifiedSpeed, modifiedAcceleration);
   regulateControl(modifiedSpeed, modifiedAcceleration);
 
-  processDisplay();
-  processWireless();
 
   if (5 < (millis() - offset) / 1000) {
     start1 = !start1;
@@ -445,7 +447,8 @@ void mode2() {
   if (start2) {
     initTorqueMode();
     start2 = !start2;
-    pidPosmode2.init(1, 0, 0);
+    pidPosmode2.init(1, 0.00, 0.05);
+    pidSpeedmode2.init(1, 0.001, 0.05);
     int16_t ax, ay, az, gx, gy, gz;
     mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
     origin = atan2((float)ay, (float)az) * 180.0 / PI;
@@ -453,82 +456,85 @@ void mode2() {
   }
   processMPU6050(origin);
 }
+bool start3 = true;
 void mode3() {
   //多段位置模式实现，但是不能实时根据pid纠正速度、加速度
+  if (start3) {
+    node.writeSingleRegister(0x2109, 1);
+    delay(50);
+    node.writeSingleRegister(0x2310, 0);
+    delay(50);
+    node.writeSingleRegister(0x2311, 0);
+    delay(50);
+    node.writeSingleRegister(0x2314, 4);
+    delay(50);
+    node.writeSingleRegister(0x2315, 1);
+    delay(50);
 
-  node.writeSingleRegister(0x2109, 1);
-  delay(50);
-  node.writeSingleRegister(0x2310, 0);
-  delay(50);
-  node.writeSingleRegister(0x2311, 0);
-  delay(50);
-  node.writeSingleRegister(0x2314, 4);
-  delay(50);
-  node.writeSingleRegister(0x2315, 1);
-  delay(50);
+    int32_t displacement = 125;  // 第1段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+    delay(50);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x2321, 30);  //第1段目标速度
+    delay(50);
+    node.writeSingleRegister(0x2322, 10);  //第1段加速度
+    delay(50);
+    node.writeSingleRegister(0x2323, 0);  //第1段减速度
+    delay(50);
+    node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
+    delay(50);
 
-  int32_t displacement = 125;  // 第1段位移
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
-  delay(50);
-  node.clearTransmitBuffer();
-  node.writeSingleRegister(0x2321, 30);  //第1段目标速度
-  delay(50);
-  node.writeSingleRegister(0x2322, 10);  //第1段加速度
-  delay(50);
-  node.writeSingleRegister(0x2323, 0);  //第1段减速度
-  delay(50);
-  node.writeSingleRegister(0x2324, 0);  //第1段完成后等待时间
-  delay(50);
+    displacement = 375;  // 第2段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x2325, 2);
+    delay(50);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x2326, 30);
+    delay(50);
+    node.writeSingleRegister(0x2327, 0);
+    delay(50);
+    node.writeSingleRegister(0x2328, 0);
+    delay(50);
+    node.writeSingleRegister(0x2329, 0);
+    delay(50);
 
-  displacement = 375;  // 第2段位移
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x2325, 2);
-  delay(50);
-  node.clearTransmitBuffer();
-  node.writeSingleRegister(0x2326, 30);
-  delay(50);
-  node.writeSingleRegister(0x2327, 0);
-  delay(50);
-  node.writeSingleRegister(0x2328, 0);
-  delay(50);
-  node.writeSingleRegister(0x2329, 0);
-  delay(50);
+    displacement = 0;  // 第3段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x232A, 2);
+    delay(50);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x232B, 1);
+    delay(50);
+    node.writeSingleRegister(0x232C, 0);
+    delay(50);
+    node.writeSingleRegister(0x232D, 10);
+    delay(50);
+    node.writeSingleRegister(0x232E, 0);
+    delay(50);
 
-  displacement = 0;  // 第3段位移
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x232A, 2);
-  delay(50);
-  node.clearTransmitBuffer();
-  node.writeSingleRegister(0x232B, 1);
-  delay(50);
-  node.writeSingleRegister(0x232C, 0);
-  delay(50);
-  node.writeSingleRegister(0x232D, 10);
-  delay(50);
-  node.writeSingleRegister(0x232E, 0);
-  delay(50);
+    displacement = 0;  // 第4段位移
+    node.setTransmitBuffer(1, lowWord(displacement));
+    node.setTransmitBuffer(0, highWord(displacement));
+    node.writeMultipleRegisters(0x232F, 2);
+    delay(50);
+    node.clearTransmitBuffer();
+    node.writeSingleRegister(0x2330, 0);
+    delay(50);
+    node.writeSingleRegister(0x2331, 0);
+    delay(50);
+    node.writeSingleRegister(0x2332, 1);
+    delay(50);
+    node.writeSingleRegister(0x2333, 0);
+    delay(50);
 
-  displacement = 0;  // 第4段位移
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x232F, 2);
-  delay(50);
-  node.clearTransmitBuffer();
-  node.writeSingleRegister(0x2330, 0);
-  delay(50);
-  node.writeSingleRegister(0x2331, 0);
-  delay(50);
-  node.writeSingleRegister(0x2332, 1);
-  delay(50);
-  node.writeSingleRegister(0x2333, 1000);
-  delay(50);
-
-  node.writeSingleRegister(0x2300, 2);
-  delay(50);
+    node.writeSingleRegister(0x2300, 2);
+    delay(50);
+    start3 = false;
+  }
 }
 
 
@@ -537,8 +543,8 @@ void mode3() {
 void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   float targetSpeed, targetAcceleration, targetPosition;
 
-  delay(20);
   currentSpeed = getSpeed();
+  delay(10);
   currentAcceleration = getAcc();
   float currentTime = (millis() - offset) / 1000.0;  // 当前时间（秒）
 
@@ -571,6 +577,20 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   }
 }
 void processControl() {
+  // node.writeSingleRegister(0x2109, 2);
+  // delay(50);
+  // node.writeSingleRegister(0x2380, 1);
+  // delay(50);
+  // node.writeSingleRegister(0x2382, 1);
+  // delay(50);
+  // node.writeSingleRegister(0x2385, 10);
+  // delay(50);
+  // node.writeSingleRegister(0x2390, 30);  //第一段
+  // delay(50);
+  // node.writeSingleRegister(0x2391, 10);
+  // delay(50);
+  // node.writeSingleRegister(0x2300, 2);
+  // delay(50);
   node.writeSingleRegister(0x2109, 2);
   delay(50);
   node.writeSingleRegister(0x2380, 1);
@@ -606,6 +626,7 @@ void stopServo() {
 }
 
 float getPosition() {
+  delay(10);
   uint8_t result = node.readHoldingRegisters(0x6064, 2);
   if (result == node.ku8MBSuccess) {
     uint16_t highWord = node.getResponseBuffer(0);  // 高16位
@@ -619,6 +640,7 @@ float getPosition() {
   return 0;
 }
 float getSpeed() {
+  delay(10);
   uint8_t result = node.readHoldingRegisters(0x606C, 2);
   if (result == node.ku8MBSuccess) {
     uint16_t highWord = node.getResponseBuffer(0);  // 高16位
@@ -630,9 +652,8 @@ float getSpeed() {
 }
 float getAcc() {
   float speed1 = getSpeed();
-  delay(6);
   float speed2 = getSpeed();
-  return (speed2 - speed1) * (10 / (60 * 0.006));
+  return (speed2 - speed1) * (10 / (60 * 0.01));
 }
 
 
@@ -640,20 +661,20 @@ float getAcc() {
 void initTorqueMode() {
   node.writeSingleRegister(0x2109, 1);
   delay(50);
-  node.writeSingleRegister(0x2310, 3);
+  node.writeSingleRegister(0x2310, 0);
   delay(50);
   node.writeSingleRegister(0x2311, 0);
   delay(50);
   int32_t displacement = 0;
   node.setTransmitBuffer(1, lowWord(displacement));
   node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+  node.writeMultipleRegisters(0x2320, 2);
   delay(50);
-  node.writeSingleRegister(0x2321, 30);
+  node.writeSingleRegister(0x2321, 0);
   delay(50);
-  node.writeSingleRegister(0x2322, 10);
+  node.writeSingleRegister(0x2322, 30);
   delay(50);
-  node.writeSingleRegister(0x2323, 10);
+  node.writeSingleRegister(0x2323, 30);
   delay(50);
   node.writeSingleRegister(0x2316, 0);
   delay(50);
@@ -665,40 +686,51 @@ void initTorqueMode() {
 void processMPU6050(float &origin) {
   int16_t ax, ay, az, gx, gy, gz;
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  float pulsesPerDegree = ONE_ROLL / 360.0;
 
   // 采用 arctan2(accelY, accelZ) 计算倾角，单位转换为度
-  float pitch = atan2((float)ay, (float)az) * 180.0 / PI;
-  int error = pidPosmode2.compute(origin, pitch);
-  float pulsesPerDegree = ONE_ROLL / 360.0;
+  int pitch = atan2((float)ay, (float)az) * 180.0 / PI;
+
+  int error = origin - pitch;
+
+  int regulateSpeed = pidPosmode2.compute(origin, pitch) * pulsesPerDegree;
 
   float targetPositionPulFloat = error * pulsesPerDegree;
   currentPos = -OriginPos + getPosition();
-  if (abs(targetPositionPulFloat - currentPos) < 10) {
-    int32_t posCmdPul = (int32_t)(targetPositionPulFloat);
-    node.setTransmitBuffer(1, lowWord(posCmdPul));
-    node.setTransmitBuffer(0, highWord(posCmdPul));
-    node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
-    delay(50);
+  currentSpeed = getSpeed();
+  float regulatePos = pidSpeedmode2.compute(regulateSpeed, currentSpeed);
+  delay(10);
 
-    node.writeSingleRegister(0x2316, 0);
-    delay(50);
-    node.writeSingleRegister(0x2316, 1);
-    delay(50);
-    origin = pitch;
-    OriginPos = currentPos;
-  } else {
-    delay(10);
-  }
+  int32_t posCmdPul = (int32_t)(regulatePos);
+  if (abs(error) < 2) posCmdPul = 0;
+  node.setTransmitBuffer(1, lowWord(posCmdPul));
+  node.setTransmitBuffer(0, highWord(posCmdPul));
+  node.writeMultipleRegisters(0x2320, 2);  // 写入0x2320及后续寄存器（共2个寄存器）
+  delay(10);
+  node.writeSingleRegister(0x2321, 100);
+  delay(10);
+  node.writeSingleRegister(0x2316, 0);
+  delay(10);
+  node.writeSingleRegister(0x2316, 1);
+  delay(10);
+  origin = pitch;
+
   // 调试输出
   Serial.print("MPU6050 Pitch: ");
   Serial.print(pitch);
   Serial.print(" °, Error: ");
   Serial.print(error);
-  Serial.print(" °, Pos Command: ");
+  Serial.print(" °, targetPositionPulFloat: ");
   Serial.print(targetPositionPulFloat);
-  Serial.print("pul,currentPos :");
+  Serial.print(" pul, Pos Command: ");
+  Serial.print(regulatePos);
+  Serial.print(" pul, Speed Command: ");
+  Serial.println(regulateSpeed);
+  Serial.print(" rpm,currentPos :");
   Serial.print(currentPos);
-  Serial.println("pul");
+  Serial.print(" pul,currentSpeed :");
+  Serial.print(currentSpeed);
+  Serial.println(" rpm");
 }
 
 
@@ -903,8 +935,6 @@ void processWifiServer() {
     }
   }
 }
-
-
 
 
 
