@@ -1,7 +1,8 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
-#include <MPU6050.h>
+//#include <MPU6050.h>
+#include <MPU6050_tockn.h>
 #include <ModbusMaster.h>
 #include <BluetoothSerial.h>
 #include <math.h>
@@ -28,7 +29,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define HISTORY_SIZE 64  // 历史数据缓冲区大小
 #define RECONNECT_INTERVAL 5000
 
-MPU6050 mpu;
+MPU6050 mpu(Wire);
 ModbusMaster node;
 BluetoothSerial SerialBT;  // 声明蓝牙串口实例
 
@@ -60,13 +61,13 @@ unsigned long reconnectAttemptTime = 0;
 float sensitivity;
 unsigned int offset = 0;
 
-int mode = 2;  //伺服电机运行模式
+int mode = 1;  //伺服电机运行模式
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
 void processRS485Communication();
-void processSensors(float &modifiedSpeed, float &modifiedAcceleration);
+void processSensors(float &modifiedSpeed, float &modifiedPos);
 void processControl();
-void regulateControl(float modifiedSpeed, float modifiedAcceleration);
+void regulateControl(float modifiedSpeed, float modifiedPos);
 float getPosition();
 float getSpeed();
 float getAcc();
@@ -121,10 +122,10 @@ private:
 };
 
 // 全局PID控制器实例
-PID pidSpeedT;         // 用于速度控制的PID 梯形曲线
-PID pidAccelerationT;  // 用于加减速控制的PID
-PID pidSpeedS;         // 用于速度控制的PID s曲线
-PID pidAccelerationS;  // 用于加减速控制的PID
+PID pidSpeedT;  // 用于速度控制的PID 梯形曲线
+PID pidPosT;    // 用于加减速控制的PID
+PID pidSpeedS;  // 用于速度控制的PID s曲线
+PID pidPosS;    // 用于加减速控制的PID
 
 PID pidPosmode2;
 PID pidSpeedmode2;
@@ -303,11 +304,24 @@ public:
   }
 };
 TrapezoidalProfile trapezoidal(0.5, 0.5, 0.5, 30, 10, 10);
-SCurveProfile sCurve(0.5, 0, 0.5, 10, 0.5);
+SCurveProfile sCurve(0.5, 0, 0.5, 10, 0);
 
 // ------------------------ setup() 函数 ------------------------
 void setup() {
   initHardware();
+
+  const char *msg = "Hello, World!";
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
+
+  int16_t x = (SCREEN_WIDTH - w) / 2;
+  int16_t y = (SCREEN_HEIGHT - h) / 2;
+
+  display.setCursor(x, y);
+  display.print(msg);
+  display.display();
+
 
   uint8_t result = node.readHoldingRegisters(0x2035, 2);
   if (result == node.ku8MBSuccess) {
@@ -326,16 +340,16 @@ void setup() {
   start1 = true;
   start2 = true;
 
-  uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
-  switch (ScaleGyroRange) {
-    case 0: sensitivity = 131.0; break;  // ±250°/s
-    case 1: sensitivity = 65.5; break;   // ±500°/s
-    case 2: sensitivity = 32.8; break;   // ±1000°/s
-    case 3: sensitivity = 16.4; break;   // ±2000°/s
-    default: sensitivity = 131.0; break;
-  }
-  Serial.print("灵敏度：");
-  Serial.println(sensitivity);
+  // uint8_t ScaleGyroRange = mpu.getFullScaleGyroRange();
+  // switch (ScaleGyroRange) {
+  //   case 0: sensitivity = 131.0; break;  // ±250°/s
+  //   case 1: sensitivity = 65.5; break;   // ±500°/s
+  //   case 2: sensitivity = 32.8; break;   // ±1000°/s
+  //   case 3: sensitivity = 16.4; break;   // ±2000°/s
+  //   default: sensitivity = 131.0; break;
+  // }
+  // Serial.print("灵敏度：");
+  // Serial.println(sensitivity);
 }
 
 // ------------------------ loop() 函数 ------------------------
@@ -369,7 +383,8 @@ void initHardware() {
   display.clearDisplay();
   display.display();
   // 初始化 MPU6050
-  mpu.initialize();
+  mpu.begin();
+  mpu.calcGyroOffsets(true);
   // if (!mpu.testConnection()) {
   //   Serial.println("MPU6050 connection failed");
   // } else {
@@ -379,6 +394,7 @@ void initHardware() {
   // 初始化 RS485 通信：ESP32 的 Serial2 设置为 RX->D16, TX->D17
   Serial2.begin(RS485_BAUD, SERIAL_8N1, 17, 16);
   node.begin(01, Serial2);
+  Serial.println();
   Serial.println("Modbus RTU initialization complete.");
   node.writeSingleRegister(0x2008, 1);  //复位操作
   delay(50);
@@ -409,15 +425,15 @@ void initHardware() {
 
 void mode1() {
   float modifiedSpeed = 0;
-  float modifiedAcceleration = 0;
+  float modifiedPos = 0;
 
   if (start1) {
     processControl();
     // PID控制器实例
-    pidSpeedT.init(1, 0.00, 0.00);           // 用于速度控制的PID 梯形曲线
-    pidAccelerationT.init(3.5, 0.05, 0.01);  // 用于加减速控制的PID
-    pidSpeedS.init(1, 0.00, 0.00);           // 用于速度控制的PID s曲线
-    pidAccelerationS.init(1.0, 0.01, 0.05);  // 用于加减速控制的PID
+    pidSpeedT.init(1, 0.00, 0.00);  // 用于速度控制的PID 梯形曲线
+    pidPosT.init(1.0, 0.01, 0.01);  // 用于位置控制的PID
+    pidSpeedS.init(1, 0.00, 0.00);  // 用于速度控制的PID s曲线
+    pidPosS.init(1.0, 0.00, 0.5);  // 用于位置控制的PID
     delay(20);
     OriginPos = getPosition();
     start1 = !start1;
@@ -425,18 +441,26 @@ void mode1() {
     Serial.print("开始时间：");
     Serial.println(offset / 1000);
     Serial.print("初始位置:");
-    Serial.println(offset / 1000);
+    Serial.println(OriginPos);
+    if (useTrapezoidalProfile) {
+      Serial.println("T曲线模式");
+    } else {
+      Serial.println("S曲线模式");
+    }
+    delay(10);
+    node.writeSingleRegister(0x2300, 2);
+    delay(5);
   }
 
-  processSensors(modifiedSpeed, modifiedAcceleration);
-  regulateControl(modifiedSpeed, modifiedAcceleration);
+  processSensors(modifiedSpeed, modifiedPos);
+  regulateControl(modifiedSpeed, modifiedPos);
 
 
-  if (5 < (millis() - offset) / 1000) {
+  if (currentPos >= 500) {
     start1 = !start1;
     useTrapezoidalProfile = !useTrapezoidalProfile;
     stopServo();
-    delay(1000);
+    delay(5000);
     clearSpeedHistory();
     //可以写一些后续的其他操作……
   }
@@ -447,11 +471,11 @@ void mode2() {
   if (start2) {
     initTorqueMode();
     start2 = !start2;
-    pidPosmode2.init(1, 0.00, 0.05);
-    pidSpeedmode2.init(1, 0.001, 0.05);
+    pidPosmode2.init(1, 0.01, 0.05);
+    pidSpeedmode2.init(1, 0.0, 0.05);
     int16_t ax, ay, az, gx, gy, gz;
-    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-    origin = atan2((float)ay, (float)az) * 180.0 / PI;
+    mpu.update();
+    origin = mpu.getAngleX();
     OriginPos = getPosition();
   }
   processMPU6050(origin);
@@ -540,12 +564,12 @@ void mode3() {
 
 //-------MODE1 pid转180------------
 // 传感器模块：读取速度并计算PID调整值
-void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
+void processSensors(float &modifiedSpeed, float &modifiedPos) {
   float targetSpeed, targetAcceleration, targetPosition;
 
   currentSpeed = getSpeed();
-  delay(10);
   currentAcceleration = getAcc();
+  currentPos = (getPosition() - OriginPos);
   float currentTime = (millis() - offset) / 1000.0;  // 当前时间（秒）
 
 
@@ -554,26 +578,26 @@ void processSensors(float &modifiedSpeed, float &modifiedAcceleration) {
   } else {
     sCurve.updateProfile(currentTime, targetSpeed, targetAcceleration, targetPosition);
   }
-  if (true) {
-    // Serial.print("currentTime:");
-    // Serial.println(currentTime);
-    // Serial.print("currentSpeed:");
-    // Serial.println(currentSpeed);
-    // Serial.print("currentAcceleration:");
-    // Serial.println(currentAcceleration);
-    // Serial.print("Target Speed: ");
-    // Serial.println(targetSpeed);
-    // Serial.print("Target Acceleration: ");
-    // Serial.println(targetAcceleration);
-  }
+
+  // Serial.print("currentTime:");
+  // Serial.print(currentTime);
+  // Serial.print(" currentSpeed:");
+  // Serial.print(currentSpeed);
+  // Serial.print(" currentPos:");
+  // Serial.println(currentPos);
+  // Serial.print("Target Speed: ");
+  // Serial.print(targetSpeed);
+  // Serial.print(" Target Pos: ");
+  // Serial.println(targetPosition);
+
 
   // 使用PID计算修正值
   if (useTrapezoidalProfile) {
     modifiedSpeed = pidSpeedT.compute(targetSpeed, currentSpeed);
-    modifiedAcceleration = pidAccelerationT.compute(targetAcceleration, currentAcceleration);
+    modifiedPos = pidPosT.compute(targetPosition, currentPos);
   } else {
     modifiedSpeed = pidSpeedS.compute(targetSpeed, currentSpeed);
-    modifiedAcceleration = pidAccelerationS.compute(targetAcceleration, currentAcceleration);
+    modifiedPos = pidPosS.compute(targetPosition, currentPos);
   }
 }
 void processControl() {
@@ -591,34 +615,48 @@ void processControl() {
   // delay(50);
   // node.writeSingleRegister(0x2300, 2);
   // delay(50);
-  node.writeSingleRegister(0x2109, 2);
+  node.writeSingleRegister(0x2109, 1);
   delay(50);
-  node.writeSingleRegister(0x2380, 1);
+  node.writeSingleRegister(0x2310, 2);
   delay(50);
-  node.writeSingleRegister(0x2382, 1);
+  node.writeSingleRegister(0x2311, 0);
   delay(50);
-  node.writeSingleRegister(0x2385, 10);
+  node.writeSingleRegister(0x2314, 1);
   delay(50);
-  node.writeSingleRegister(0x2390, 30);  //第一段
+  node.writeSingleRegister(0x2315, 1);
   delay(50);
-  node.writeSingleRegister(0x2391, 10);
+  int32_t displacement = 500;
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x2320, 2);
   delay(50);
-  node.writeSingleRegister(0x2300, 2);
+  node.writeSingleRegister(0x2321, 30);
+  delay(50);
+  node.writeSingleRegister(0x2322, 10);  //第一段
+  delay(50);
+  node.writeSingleRegister(0x2323, 10);
   delay(50);
 }
 // 控制模块：根据传入的修改后的速度和加速度设置Modbus寄存器
-void regulateControl(float modifiedSpeed, float modifiedAcceleration) {
-  modifiedAcceleration += currentAcceleration;
+void regulateControl(float modifiedSpeed, float modifiedPos) {
   //modifiedSpeed += currentSpeed;
-  node.writeSingleRegister(0x2385, modifiedAcceleration);
-  //delay(20);
-  //node.writeSingleRegister(0x2390, modifiedSpeed);
-
+  delay(10);
+  int32_t displacement = modifiedPos;
+  node.setTransmitBuffer(1, lowWord(displacement));
+  node.setTransmitBuffer(0, highWord(displacement));
+  node.writeMultipleRegisters(0x2320, 2);
+  delay(10);
+  // node.writeSingleRegister(0x2390, modifiedSpeed);
+  // delay(10);
+  node.writeSingleRegister(0x2316, 0);
+  delay(10);
+  node.writeSingleRegister(0x2316, 1);
+  delay(10);
   // 打印输出
   // Serial.print("Modified Speed: ");
   // Serial.println(modifiedSpeed);
   // Serial.print("Modified Acceleration: ");
-  // Serial.println(modifiedAcceleration);
+  // Serial.println(modifiedPos);
 }
 void stopServo() {
   node.writeSingleRegister(0x2300, 1);
@@ -665,6 +703,8 @@ void initTorqueMode() {
   delay(50);
   node.writeSingleRegister(0x2311, 0);
   delay(50);
+  node.writeSingleRegister(0x2312, 0);
+  delay(50);
   int32_t displacement = 0;
   node.setTransmitBuffer(1, lowWord(displacement));
   node.setTransmitBuffer(0, highWord(displacement));
@@ -684,12 +724,13 @@ void initTorqueMode() {
   delay(1000);
 }
 void processMPU6050(float &origin) {
-  int16_t ax, ay, az, gx, gy, gz;
-  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  // int16_t ax, ay, az, gx, gy, gz;
+  // mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
   float pulsesPerDegree = ONE_ROLL / 360.0;
 
   // 采用 arctan2(accelY, accelZ) 计算倾角，单位转换为度
-  int pitch = atan2((float)ay, (float)az) * 180.0 / PI;
+  mpu.update();
+  float pitch = mpu.getAngleX();
 
   int error = origin - pitch;
 
@@ -741,18 +782,21 @@ void processDisplay() {
   display.clearDisplay();
 
   // 1. 获取传感器数据
-  int16_t ax, ay, az;
-  mpu.getAcceleration(&ax, &ay, &az);
-  float AccXangle = atan2((float)ay, sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
+  // int16_t ax, ay, az;
+  // mpu.getAcceleration(&ax, &ay, &az);
+  // float AccXangle = atan2((float)ay, sqrt(pow((float)ax, 2) + pow((float)az, 2))) * 180 / PI;
   updateSpeedHistory(currentSpeed);
 
   // 第2行：速度
+  char buf[32];
+  sprintf(buf, "Speed: %5.1f rpm", currentSpeed);
   display.setCursor(0, 10);
-  display.printf("Speed: %5.1f rpm", currentSpeed);
+  display.print(buf);
+
 
   // 3. 中间图表区 (速度曲线)
   const int graphY = 32;       // 图表起始Y坐标
-  const int graphHeight = 28;  // 图表高度
+  const int graphHeight = 56;  // 图表高度
   const int graphWidth = display.width();
 
   // 绘制坐标轴
