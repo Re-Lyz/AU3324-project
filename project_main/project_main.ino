@@ -353,7 +353,6 @@ void setup() {
   // }
   // Serial.print("灵敏度：");
   // Serial.println(sensitivity);
-
 }
 
 // ------------------------ loop() 函数 ------------------------
@@ -436,10 +435,10 @@ void mode1() {
     processControl();
     // PID控制器实例
 
-    pidSpeedT.init(1, 0.00, 0.00);  // 用于速度控制的PID 梯形曲线
-    pidPosT.init(1.0, 0.01, 0.01);  // 用于位置控制的PID
-    pidSpeedS.init(1, 0.00, 0.00);  // 用于速度控制的PID s曲线
-    pidPosS.init(1.0, 0.00, 0.5);   // 用于位置控制的PID
+    //pidSpeedT.init(1, 0.01, 0.05);  // 用于速度控制的PID 梯形曲线
+    pidPosT.init(5, 0.01, 0.05);  // 用于位置控制的PID
+    //pidSpeedS.init(1, 0.01, 0.05);  // 用于速度控制的PID s曲线
+    pidPosS.init(5, 0.01, 0.05);  // 用于位置控制的PID
     delay(20);
     OriginPos = getPosition();
 
@@ -464,7 +463,7 @@ void mode1() {
   regulateControl(modifiedSpeed, modifiedPos);
 
 
-  if (currentPos >= 500) {
+  if (currentPos >= 500||(millis() - offset>10000)) {
     start1 = !start1;
     useTrapezoidalProfile = !useTrapezoidalProfile;
     stopServo();
@@ -485,7 +484,6 @@ void mode2() {
     mpu.update();
     origin = mpu.getAngleX();
     OriginPos = getPosition();
-
   }
   processMPU6050(origin);
 }
@@ -588,16 +586,18 @@ void processSensors(float &modifiedSpeed, float &modifiedPos) {
     sCurve.updateProfile(currentTime, targetSpeed, targetAcceleration, targetPosition);
   }
 
-  // Serial.print("currentTime:");
-  // Serial.print(currentTime);
-  // Serial.print(" currentSpeed:");
-  // Serial.print(currentSpeed);
-  // Serial.print(" currentPos:");
-  // Serial.println(currentPos);
-  // Serial.print("Target Speed: ");
-  // Serial.print(targetSpeed);
-  // Serial.print(" Target Pos: ");
-  // Serial.println(targetPosition);
+  Serial.print("currentTime:");
+  Serial.print(currentTime);
+  Serial.print(" currentSpeed:");
+  Serial.print(currentSpeed);
+  Serial.print(" currentPos:");
+  Serial.print(currentPos);
+  Serial.print(" currentAcc:");
+  Serial.println(currentAcceleration);
+  Serial.print("Target Speed: ");
+  Serial.print(targetSpeed);
+  Serial.print(" Target Pos: ");
+  Serial.println(targetPosition);
 
 
   // 使用PID计算修正值
@@ -608,22 +608,41 @@ void processSensors(float &modifiedSpeed, float &modifiedPos) {
     modifiedSpeed = pidSpeedS.compute(targetSpeed, currentSpeed);
     modifiedPos = pidPosS.compute(targetPosition, currentPos);
   }
+  Serial.print("modifiedSpeed: ");
+  Serial.print(modifiedSpeed);
+  Serial.print(" modifiedPos: ");
+  Serial.println(modifiedPos);
 }
 void processControl() {
-  //速度模式
-  node.writeSingleRegister(0x2109, 2);
-  delay(50);
-  node.writeSingleRegister(0x2380, 1);
-  delay(50);
-  node.writeSingleRegister(0x2382, 1);
-  delay(50);
-  node.writeSingleRegister(0x2385, 10);
-  delay(50);
-  node.writeSingleRegister(0x2390, 30);  //第一段
-  delay(50);
-  node.writeSingleRegister(0x2391, 10);
-  delay(50);
-
+  if (useTrapezoidalProfile) {
+    //速度模式
+    node.writeSingleRegister(0x2109, 2);
+    delay(50);
+    node.writeSingleRegister(0x2380, 1);
+    delay(50);
+    node.writeSingleRegister(0x2382, 1);
+    delay(50);
+    node.writeSingleRegister(0x2385, 10);
+    delay(50);
+    node.writeSingleRegister(0x2390, 30);  //第一段
+    delay(50);
+    node.writeSingleRegister(0x2391, 12);
+    delay(50);
+  } else {
+    //速度模式
+    node.writeSingleRegister(0x2109, 2);
+    delay(50);
+    node.writeSingleRegister(0x2380, 1);
+    delay(50);
+    node.writeSingleRegister(0x2382, 1);
+    delay(50);
+    node.writeSingleRegister(0x2385, 5);
+    delay(50);
+    node.writeSingleRegister(0x2390, 30);  //第一段
+    delay(50);
+    node.writeSingleRegister(0x2391, 12);
+    delay(50);
+  }
 
   // 位置模式
   // node.writeSingleRegister(0x2109, 1);
@@ -650,15 +669,21 @@ void processControl() {
 }
 // 控制模块：根据传入的修改后的速度和加速度设置Modbus寄存器
 void regulateControl(float modifiedSpeed, float modifiedPos) {
-  modifiedSpeed += currentSpeed;
+  //modifiedSpeed += currentSpeed;
   // delay(10);
   // int32_t displacement = modifiedPos;
   // node.setTransmitBuffer(1, lowWord(displacement));
   // node.setTransmitBuffer(0, highWord(displacement));
   // node.writeMultipleRegisters(0x2320, 2);
+
   delay(10);
-  node.writeSingleRegister(0x2390, modifiedSpeed);
+  modifiedPos = modifiedPos / ONE_ROLL * 60;
+  node.writeSingleRegister(0x2390, modifiedPos);
   delay(10);
+  modifiedSpeed = abs(modifiedSpeed / 6);
+  node.writeSingleRegister(0x2385, modifiedSpeed);
+  delay(10);
+
   // node.writeSingleRegister(0x2316, 0);
   // delay(10);
   // node.writeSingleRegister(0x2316, 1);
@@ -686,7 +711,7 @@ float getPosition() {
     return data;
     //node.clearResponseBuffer();
   }
-  return 0;
+  return 999;
 }
 float getSpeed() {
   delay(10);
@@ -697,12 +722,16 @@ float getSpeed() {
     int32_t data = ((int32_t)highWord << 16) | lowWord;
     return data;
   }
-  return 0;
+  return 999;
 }
 float getAcc() {
-  float speed1 = getSpeed();
-  float speed2 = getSpeed();
-  return (speed2 - speed1) * (10 / (60 * 0.01));
+  delay(10);
+  uint8_t result = node.readHoldingRegisters(0x2385, 1);
+  if (result == node.ku8MBSuccess) {
+    uint16_t data = node.getResponseBuffer(0);
+    return data;
+  }
+  return 999;
 }
 
 
