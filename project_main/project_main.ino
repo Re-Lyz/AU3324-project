@@ -433,7 +433,7 @@ void mode1() {
     pidSpeedT.init(1, 0.00, 0.00);  // 用于速度控制的PID 梯形曲线
     pidPosT.init(1.0, 0.01, 0.01);  // 用于位置控制的PID
     pidSpeedS.init(1, 0.00, 0.00);  // 用于速度控制的PID s曲线
-    pidPosS.init(1.0, 0.00, 0.5);  // 用于位置控制的PID
+    pidPosS.init(1.0, 0.00, 0.5);   // 用于位置控制的PID
     delay(20);
     OriginPos = getPosition();
     start1 = !start1;
@@ -601,57 +601,59 @@ void processSensors(float &modifiedSpeed, float &modifiedPos) {
   }
 }
 void processControl() {
-  // node.writeSingleRegister(0x2109, 2);
+  //速度模式
+  node.writeSingleRegister(0x2109, 2);
+  delay(50);
+  node.writeSingleRegister(0x2380, 1);
+  delay(50);
+  node.writeSingleRegister(0x2382, 1);
+  delay(50);
+  node.writeSingleRegister(0x2385, 10);
+  delay(50);
+  node.writeSingleRegister(0x2390, 30);  //第一段
+  delay(50);
+  node.writeSingleRegister(0x2391, 10);
+  delay(50);
+
+
+  // 位置模式
+  // node.writeSingleRegister(0x2109, 1);
   // delay(50);
-  // node.writeSingleRegister(0x2380, 1);
+  // node.writeSingleRegister(0x2310, 2);
   // delay(50);
-  // node.writeSingleRegister(0x2382, 1);
+  // node.writeSingleRegister(0x2311, 0);
   // delay(50);
-  // node.writeSingleRegister(0x2385, 10);
+  // node.writeSingleRegister(0x2314, 1);
   // delay(50);
-  // node.writeSingleRegister(0x2390, 30);  //第一段
+  // node.writeSingleRegister(0x2315, 1);
   // delay(50);
-  // node.writeSingleRegister(0x2391, 10);
+  // int32_t displacement = 500;
+  // node.setTransmitBuffer(1, lowWord(displacement));
+  // node.setTransmitBuffer(0, highWord(displacement));
+  // node.writeMultipleRegisters(0x2320, 2);
   // delay(50);
-  // node.writeSingleRegister(0x2300, 2);
+  // node.writeSingleRegister(0x2321, 30);
   // delay(50);
-  node.writeSingleRegister(0x2109, 1);
-  delay(50);
-  node.writeSingleRegister(0x2310, 2);
-  delay(50);
-  node.writeSingleRegister(0x2311, 0);
-  delay(50);
-  node.writeSingleRegister(0x2314, 1);
-  delay(50);
-  node.writeSingleRegister(0x2315, 1);
-  delay(50);
-  int32_t displacement = 500;
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x2320, 2);
-  delay(50);
-  node.writeSingleRegister(0x2321, 30);
-  delay(50);
-  node.writeSingleRegister(0x2322, 10);  //第一段
-  delay(50);
-  node.writeSingleRegister(0x2323, 10);
-  delay(50);
+  // node.writeSingleRegister(0x2322, 10);  //第一段
+  // delay(50);
+  // node.writeSingleRegister(0x2323, 10);
+  // delay(50);
 }
 // 控制模块：根据传入的修改后的速度和加速度设置Modbus寄存器
 void regulateControl(float modifiedSpeed, float modifiedPos) {
-  //modifiedSpeed += currentSpeed;
-  delay(10);
-  int32_t displacement = modifiedPos;
-  node.setTransmitBuffer(1, lowWord(displacement));
-  node.setTransmitBuffer(0, highWord(displacement));
-  node.writeMultipleRegisters(0x2320, 2);
-  delay(10);
-  // node.writeSingleRegister(0x2390, modifiedSpeed);
+  modifiedSpeed += currentSpeed;
   // delay(10);
-  node.writeSingleRegister(0x2316, 0);
+  // int32_t displacement = modifiedPos;
+  // node.setTransmitBuffer(1, lowWord(displacement));
+  // node.setTransmitBuffer(0, highWord(displacement));
+  // node.writeMultipleRegisters(0x2320, 2);
   delay(10);
-  node.writeSingleRegister(0x2316, 1);
+  node.writeSingleRegister(0x2390, modifiedSpeed);
   delay(10);
+  // node.writeSingleRegister(0x2316, 0);
+  // delay(10);
+  // node.writeSingleRegister(0x2316, 1);
+  // delay(10);
   // 打印输出
   // Serial.print("Modified Speed: ");
   // Serial.println(modifiedSpeed);
