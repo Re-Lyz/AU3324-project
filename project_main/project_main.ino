@@ -61,7 +61,10 @@ unsigned long reconnectAttemptTime = 0;
 float sensitivity;
 unsigned int offset = 0;
 
+
 int mode = 1;  //伺服电机运行模式
+
+
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
 void processRS485Communication();
@@ -350,6 +353,7 @@ void setup() {
   // }
   // Serial.print("灵敏度：");
   // Serial.println(sensitivity);
+
 }
 
 // ------------------------ loop() 函数 ------------------------
@@ -360,8 +364,9 @@ void loop() {
   switch (mode) {
     case 1: mode1(); break;  //180度 pid 转
     case 2: mode2(); break;  //平衡 mpu6050
-    case 3: mode3(); break;  //多端位置
+    case 3: mode3(); break;  //多段位置
     case 4: debug(); break;
+
     default: break;
   }
 }
@@ -430,12 +435,14 @@ void mode1() {
   if (start1) {
     processControl();
     // PID控制器实例
+
     pidSpeedT.init(1, 0.00, 0.00);  // 用于速度控制的PID 梯形曲线
     pidPosT.init(1.0, 0.01, 0.01);  // 用于位置控制的PID
     pidSpeedS.init(1, 0.00, 0.00);  // 用于速度控制的PID s曲线
     pidPosS.init(1.0, 0.00, 0.5);   // 用于位置控制的PID
     delay(20);
     OriginPos = getPosition();
+
     start1 = !start1;
     offset = millis();  //记录初始时间，用于计算当前时间的理论速度和加速度
     Serial.print("开始时间：");
@@ -451,6 +458,7 @@ void mode1() {
     node.writeSingleRegister(0x2300, 2);
     delay(5);
   }
+
 
   processSensors(modifiedSpeed, modifiedPos);
   regulateControl(modifiedSpeed, modifiedPos);
@@ -477,6 +485,7 @@ void mode2() {
     mpu.update();
     origin = mpu.getAngleX();
     OriginPos = getPosition();
+
   }
   processMPU6050(origin);
 }
@@ -699,6 +708,7 @@ float getAcc() {
 
 //----------MODE2 保持平衡---------------
 void initTorqueMode() {
+
   node.writeSingleRegister(0x2109, 1);
   delay(50);
   node.writeSingleRegister(0x2310, 0);
@@ -733,6 +743,7 @@ void processMPU6050(float &origin) {
   // 采用 arctan2(accelY, accelZ) 计算倾角，单位转换为度
   mpu.update();
   float pitch = mpu.getAngleX();
+
 
   int error = origin - pitch;
 

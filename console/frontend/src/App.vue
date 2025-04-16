@@ -34,8 +34,8 @@
     <div class="content-right">
       <div class="panel-wrapper">
         <h2>控制面板</h2>
-        <button class="panel-button" @click="sendRotateRequest">旋转云台</button>
-        
+        <button class="panel-button" @click="sendRotateRequest">切换模式</button>
+        <button class="panel-button" @click="">旋转云台</button>
         <!-- 通信模式选择 -->
         <div class="mode-selector">
           <h3>优先通信模式</h3>
@@ -59,6 +59,7 @@
               WiFi优先
             </label>
           </div>
+          
         </div>
       </div>
     </div>
