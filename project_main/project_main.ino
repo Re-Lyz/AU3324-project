@@ -51,6 +51,7 @@ float OriginPos;
 float currentPos;
 float currentSpeed;
 float currentAcceleration;
+float targetSpeed, targetAcceleration, targetPosition;
 
 float speedHistory[HISTORY_SIZE];
 float maxSpeed = 0.0f;
@@ -63,6 +64,10 @@ unsigned int offset = 0;
 
 
 int mode = 1;  //伺服电机运行模式
+// mode1: 旋转180度 速度模式 pid控制
+// mode2: 保持水平 位置模式 pid控制
+// mode3: 旋转180 位置模式 无pid控制
+// mode4: debug模式 
 
 
 // ------------------------ 模块函数声明 ------------------------
@@ -293,7 +298,7 @@ public:
       float mirrorTime = T_acc - t_dec;
       float speed_mirror, accel_mirror;
       accelerationPhase(mirrorTime, speed_mirror, accel_mirror);
-      targetSpeed = V_max - speed_mirror;
+      targetSpeed = speed_mirror;
       targetAcceleration = -accel_mirror;
       float pos_acc = integratedAccelerationPhase(T_acc);
       float pos_dec = pos_acc - integratedAccelerationPhase(mirrorTime);
@@ -435,10 +440,10 @@ void mode1() {
     processControl();
     // PID控制器实例
 
-    //pidSpeedT.init(1, 0.01, 0.05);  // 用于速度控制的PID 梯形曲线
-    pidPosT.init(5, 0.01, 0.05);  // 用于位置控制的PID
-    //pidSpeedS.init(1, 0.01, 0.05);  // 用于速度控制的PID s曲线
-    pidPosS.init(5, 0.01, 0.05);  // 用于位置控制的PID
+    pidSpeedT.init(0, 0.00, 0.00);  // 用于速度控制的PID 梯形曲线
+    pidPosT.init(2, 0.03, 0.05);    // 用于位置控制的PID
+    pidSpeedS.init(0, 0.00, 0.00);  // 用于速度控制的PID s曲线
+    pidPosS.init(1, 0.03, 0.1);     // 用于位置控制的PID
     delay(20);
     OriginPos = getPosition();
 
@@ -463,7 +468,7 @@ void mode1() {
   regulateControl(modifiedSpeed, modifiedPos);
 
 
-  if (currentPos >= 500||(millis() - offset>10000)) {
+  if (currentPos >= 500 || (millis() - offset > 10000)) {
     start1 = !start1;
     useTrapezoidalProfile = !useTrapezoidalProfile;
     stopServo();
@@ -572,7 +577,6 @@ void mode3() {
 //-------MODE1 pid转180------------
 // 传感器模块：读取速度并计算PID调整值
 void processSensors(float &modifiedSpeed, float &modifiedPos) {
-  float targetSpeed, targetAcceleration, targetPosition;
 
   currentSpeed = getSpeed();
   currentAcceleration = getAcc();
@@ -608,10 +612,6 @@ void processSensors(float &modifiedSpeed, float &modifiedPos) {
     modifiedSpeed = pidSpeedS.compute(targetSpeed, currentSpeed);
     modifiedPos = pidPosS.compute(targetPosition, currentPos);
   }
-  Serial.print("modifiedSpeed: ");
-  Serial.print(modifiedSpeed);
-  Serial.print(" modifiedPos: ");
-  Serial.println(modifiedPos);
 }
 void processControl() {
   if (useTrapezoidalProfile) {
@@ -622,11 +622,11 @@ void processControl() {
     delay(50);
     node.writeSingleRegister(0x2382, 1);
     delay(50);
-    node.writeSingleRegister(0x2385, 10);
+    node.writeSingleRegister(0x2385, 14);
     delay(50);
     node.writeSingleRegister(0x2390, 30);  //第一段
     delay(50);
-    node.writeSingleRegister(0x2391, 12);
+    node.writeSingleRegister(0x2391, 11);
     delay(50);
   } else {
     //速度模式
@@ -636,7 +636,7 @@ void processControl() {
     delay(50);
     node.writeSingleRegister(0x2382, 1);
     delay(50);
-    node.writeSingleRegister(0x2385, 5);
+    node.writeSingleRegister(0x2385, 4);
     delay(50);
     node.writeSingleRegister(0x2390, 30);  //第一段
     delay(50);
@@ -677,12 +677,17 @@ void regulateControl(float modifiedSpeed, float modifiedPos) {
   // node.writeMultipleRegisters(0x2320, 2);
 
   delay(10);
-  modifiedPos = modifiedPos / ONE_ROLL * 60;
+  modifiedPos = targetSpeed + modifiedPos / ONE_ROLL * 60;
+  Serial.print("modifiedSpeed: ");
+  Serial.print(modifiedSpeed);
+  Serial.print(" modifiedPos: ");
+  Serial.println(modifiedPos);
+
   node.writeSingleRegister(0x2390, modifiedPos);
   delay(10);
-  modifiedSpeed = abs(modifiedSpeed / 6);
-  node.writeSingleRegister(0x2385, modifiedSpeed);
-  delay(10);
+  // modifiedSpeed = abs(modifiedSpeed / 6);
+  // node.writeSingleRegister(0x2385, modifiedSpeed);
+  // delay(10);
 
   // node.writeSingleRegister(0x2316, 0);
   // delay(10);
@@ -1043,9 +1048,13 @@ void sendServoCommand() {
   delay(50);
   node.writeSingleRegister(0x2380, 0);
   delay(50);
-  node.writeSingleRegister(0x2385, 10);
+  node.writeSingleRegister(0x2382, 1);
   delay(50);
-  node.writeSingleRegister(0x2390, 100);  // 设定目标速度
+  node.writeSingleRegister(0x2383, 1);
+  delay(50);
+  node.writeSingleRegister(0x2385, 20);
+  delay(50);
+  node.writeSingleRegister(0x2390, 200);  // 设定目标速度
   delay(50);
   node.writeSingleRegister(0x2391, 20);
   delay(50);
@@ -1054,6 +1063,7 @@ void sendServoCommand() {
   uint8_t result = node.writeSingleRegister(0x2384, 0);  // 设定加速度为 10 rps/s
   delay(50);
 
+
   if (result == node.ku8MBSuccess) {
     Serial.println("Command sent successfully.");
   } else {
@@ -1061,10 +1071,18 @@ void sendServoCommand() {
     Serial.println(result);
   }
   float pos = getPosition();
-  delay(10);
   float speed = getSpeed();
-  delay(10);
   float acc = getAcc();
+  if (pos > 30000) {
+    node.writeSingleRegister(0x2390, 100);  // 设定目标速度
+    delay(50);
+    node.writeSingleRegister(0x2385, 10);
+    delay(50);
+  }
+  if (pos > 100000) {
+    node.writeSingleRegister(0x2390, 200);  // 设定目标速度
+    delay(50);
+  }
   Serial.print("Pos:");
   Serial.print(pos);
   Serial.print(" Speed:");
