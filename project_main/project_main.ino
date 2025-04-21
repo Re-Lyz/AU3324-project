@@ -62,6 +62,11 @@ unsigned long reconnectAttemptTime = 0;
 float sensitivity;
 unsigned int offset = 0;
 
+// 位置环产生的速度参考
+volatile float g_speedRef = 0;
+// 速度环中断标志
+volatile bool  speedLoopFlag = false;
+
 
 int mode = 1;  //伺服电机运行模式
 // mode1: 旋转180度 速度模式 pid控制
@@ -435,14 +440,16 @@ void initHardware() {
 void mode1() {
   float modifiedSpeed = 0;
   float modifiedPos = 0;
+  static unsigned long lastPosMs = 0;
+  const unsigned long posPeriodMs = 1000UL / 50;
 
   if (start1) {
     processControl();
     // PID控制器实例
 
-    pidSpeedT.init(0, 0.00, 0.00);  // 用于速度控制的PID 梯形曲线
+    pidSpeedT.init(1, 0.00, 0.05);  // 用于速度控制的PID 梯形曲线
     pidPosT.init(2, 0.03, 0.05);    // 用于位置控制的PID
-    pidSpeedS.init(0, 0.00, 0.00);  // 用于速度控制的PID s曲线
+    pidSpeedS.init(1, 0.01, 0.00);  // 用于速度控制的PID s曲线
     pidPosS.init(1, 0.03, 0.1);     // 用于位置控制的PID
     delay(20);
     OriginPos = getPosition();
@@ -463,9 +470,18 @@ void mode1() {
     delay(5);
   }
 
+  if (offset - lastPosMs >= posPeriodMs) {
+    lastPosMs += posPeriodMs;
+    processSensors(modifiedSpeed, modifiedPos);
+  }
 
-  processSensors(modifiedSpeed, modifiedPos);
-  regulateControl(modifiedSpeed, modifiedPos);
+  if (speedLoopFlag) {
+    speedLoopFlag = false;
+    regulateControl(modifiedSpeed, modifiedPos);
+  }
+
+  // processSensors(modifiedSpeed, modifiedPos);
+  // regulateControl(modifiedSpeed, modifiedPos);
 
 
   if (currentPos >= 500 || (millis() - offset > 10000)) {
@@ -612,6 +628,8 @@ void processSensors(float &modifiedSpeed, float &modifiedPos) {
     modifiedSpeed = pidSpeedS.compute(targetSpeed, currentSpeed);
     modifiedPos = pidPosS.compute(targetPosition, currentPos);
   }
+
+  modifiedPos = targetSpeed * ONE_ROLL / 60 + modifiedPos;
 }
 void processControl() {
   if (useTrapezoidalProfile) {
@@ -675,9 +693,16 @@ void regulateControl(float modifiedSpeed, float modifiedPos) {
   // node.setTransmitBuffer(1, lowWord(displacement));
   // node.setTransmitBuffer(0, highWord(displacement));
   // node.writeMultipleRegisters(0x2320, 2);
-
+  currentSpeed = getSpeed();
+  modifiedPos = modifiedPos / ONE_ROLL * 60;
+  float driveCmd;
+  if (useTrapezoidalProfile) {
+    driveCmd = pidSpeedT.compute(modifiedPos, currentSpeed);
+  } else {
+    driveCmd = pidSpeedS.compute(modifiedPos, currentSpeed);
+  }
   delay(10);
-  modifiedPos = targetSpeed + modifiedPos / ONE_ROLL * 60;
+  modifiedPos = targetSpeed + driveCmd;
   Serial.print("modifiedSpeed: ");
   Serial.print(modifiedSpeed);
   Serial.print(" modifiedPos: ");
