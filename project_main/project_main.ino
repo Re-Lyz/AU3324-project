@@ -75,6 +75,7 @@ int mode = 1;  //伺服电机运行模式
 // mode4: debug模式 
 
 
+
 // ------------------------ 模块函数声明 ------------------------
 void initHardware();
 void processRS485Communication();
@@ -304,6 +305,7 @@ public:
       float speed_mirror, accel_mirror;
       accelerationPhase(mirrorTime, speed_mirror, accel_mirror);
       targetSpeed = speed_mirror;
+
       targetAcceleration = -accel_mirror;
       float pos_acc = integratedAccelerationPhase(T_acc);
       float pos_dec = pos_acc - integratedAccelerationPhase(mirrorTime);
@@ -363,6 +365,7 @@ void setup() {
   // }
   // Serial.print("灵敏度：");
   // Serial.println(sensitivity);
+
 }
 
 // ------------------------ loop() 函数 ------------------------
@@ -440,17 +443,19 @@ void initHardware() {
 void mode1() {
   float modifiedSpeed = 0;
   float modifiedPos = 0;
+
   static unsigned long lastPosMs = 0;
   const unsigned long posPeriodMs = 1000UL / 50;
+
 
   if (start1) {
     processControl();
     // PID控制器实例
-
     pidSpeedT.init(1, 0.00, 0.05);  // 用于速度控制的PID 梯形曲线
     pidPosT.init(2, 0.03, 0.05);    // 用于位置控制的PID
     pidSpeedS.init(1, 0.01, 0.00);  // 用于速度控制的PID s曲线
     pidPosS.init(1, 0.03, 0.1);     // 用于位置控制的PID
+
     delay(20);
     OriginPos = getPosition();
 
@@ -505,6 +510,7 @@ void mode2() {
     mpu.update();
     origin = mpu.getAngleX();
     OriginPos = getPosition();
+
   }
   processMPU6050(origin);
 }
@@ -593,7 +599,6 @@ void mode3() {
 //-------MODE1 pid转180------------
 // 传感器模块：读取速度并计算PID调整值
 void processSensors(float &modifiedSpeed, float &modifiedPos) {
-
   currentSpeed = getSpeed();
   currentAcceleration = getAcc();
   currentPos = (getPosition() - OriginPos);
@@ -605,7 +610,6 @@ void processSensors(float &modifiedSpeed, float &modifiedPos) {
   } else {
     sCurve.updateProfile(currentTime, targetSpeed, targetAcceleration, targetPosition);
   }
-
   Serial.print("currentTime:");
   Serial.print(currentTime);
   Serial.print(" currentSpeed:");
@@ -618,6 +622,7 @@ void processSensors(float &modifiedSpeed, float &modifiedPos) {
   Serial.print(targetSpeed);
   Serial.print(" Target Pos: ");
   Serial.println(targetPosition);
+
 
 
   // 使用PID计算修正值
@@ -662,6 +667,7 @@ void processControl() {
     delay(50);
   }
 
+
   // 位置模式
   // node.writeSingleRegister(0x2109, 1);
   // delay(50);
@@ -687,12 +693,14 @@ void processControl() {
 }
 // 控制模块：根据传入的修改后的速度和加速度设置Modbus寄存器
 void regulateControl(float modifiedSpeed, float modifiedPos) {
+
   //modifiedSpeed += currentSpeed;
   // delay(10);
   // int32_t displacement = modifiedPos;
   // node.setTransmitBuffer(1, lowWord(displacement));
   // node.setTransmitBuffer(0, highWord(displacement));
   // node.writeMultipleRegisters(0x2320, 2);
+
   currentSpeed = getSpeed();
   modifiedPos = modifiedPos / ONE_ROLL * 60;
   float driveCmd;
@@ -713,6 +721,7 @@ void regulateControl(float modifiedSpeed, float modifiedPos) {
   // modifiedSpeed = abs(modifiedSpeed / 6);
   // node.writeSingleRegister(0x2385, modifiedSpeed);
   // delay(10);
+
 
   // node.writeSingleRegister(0x2316, 0);
   // delay(10);
@@ -762,6 +771,7 @@ float getAcc() {
     return data;
   }
   return 999;
+
 }
 
 
@@ -1072,6 +1082,7 @@ void sendServoCommand() {
   node.writeSingleRegister(0x2109, 2);  // 设置模式
   delay(50);
   node.writeSingleRegister(0x2380, 0);
+
   delay(50);
   node.writeSingleRegister(0x2382, 1);
   delay(50);
@@ -1080,6 +1091,10 @@ void sendServoCommand() {
   node.writeSingleRegister(0x2385, 20);
   delay(50);
   node.writeSingleRegister(0x2390, 200);  // 设定目标速度
+  delay(50);
+  node.writeSingleRegister(0x2391, 20);
+  delay(50);
+  node.writeSingleRegister(0x2300, 2);
   delay(50);
   node.writeSingleRegister(0x2391, 20);
   delay(50);
@@ -1108,6 +1123,7 @@ void sendServoCommand() {
     node.writeSingleRegister(0x2390, 200);  // 设定目标速度
     delay(50);
   }
+
   Serial.print("Pos:");
   Serial.print(pos);
   Serial.print(" Speed:");
